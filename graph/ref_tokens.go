@@ -71,3 +71,28 @@ func SegmentEscape(name string) string {
 	name = strings.ReplaceAll(name, "%", "%25")
 	return strings.ReplaceAll(name, "/", "%2F")
 }
+
+// UnnamedName is the directory a record gets when its name renders empty,
+// usually because the record lacks the field the name is made of.
+//
+// The record is kept, not dropped: its files and its references are still
+// data. But it has no name, so it defines no symbol: find_definition does
+// not find it, and nothing that references a name reaches it. A second
+// unnamed record under the same parent is `_unnamed.2`, by the same rule as
+// any other repeated name, on both paths and in record order.
+//
+// It used to be one of two wrong things: the engine named the directory
+// `<no value>`, Go's placeholder for a missing field, which also defined
+// `<no value>` as a symbol shared by every such record; the direct path
+// dropped the record (mache-b33274). An empty name is never used as is: it
+// would give the directory its parent's ID.
+const UnnamedName = "_unnamed"
+
+// NameOrUnnamed is the directory name for a rendered name: the name itself,
+// or UnnamedName when it rendered empty, with unnamed saying which.
+func NameOrUnnamed(rendered string) (name string, unnamed bool) {
+	if rendered == "" {
+		return UnnamedName, true
+	}
+	return rendered, false
+}

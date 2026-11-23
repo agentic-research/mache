@@ -239,6 +239,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 			log.Printf("[WARN] skipping record: failed to render name %s: %v", schema.Name, err) // coverage:ignore
 			continue                                                                             // coverage:ignore
 		}
+		name, _ = graph.NameOrUnnamed(name)
 
 		currentPath := joinSegment(parentPath, name)
 		id := toNodeID(currentPath)
@@ -427,6 +428,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			log.Printf("[WARN] skipping file: failed to render name %s: %v", schema.Name, err) // coverage:ignore
 			continue                                                                           // coverage:ignore
 		}
+		name, unnamed := graph.NameOrUnnamed(name)
 
 		// Normalize path
 		currentPath := joinSegment(parentPath, name)
@@ -503,8 +505,9 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		}
 		store.AddNode(node)
 
-		// Register definition: construct name → directory ID
-		if len(schema.Files) > 0 {
+		// Register definition: construct name → directory ID. An unnamed
+		// record has no name to define.
+		if len(schema.Files) > 0 && !unnamed {
 			if err := store.AddDef(name, id); err != nil {
 				return fmt.Errorf("add def %s -> %s: %w", name, id, err) // coverage:ignore
 			} // coverage:ignore

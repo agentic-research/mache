@@ -351,8 +351,11 @@ var claims = map[string]func(t *testing.T, fx fixtures){
 	},
 	"direct path does not inject _parent": func(t *testing.T, fx fixtures) {
 		topo := topology(t, `{"version":"v1","nodes":[{"name":"vulns","children":[{"name":"{{.item.cveID}}","children":[{"name":"{{._parent.item.cveID}}","files":[{"name":"vendor","content_template":"{{.item.vendorProject}}"}]}]}]}]}`)
-		_, leaves, _ := projtest.Walk(t, projtest.VenturiDirect(t, topo, fx.dbPath), nil)
-		assert.Empty(t, leaves, "every record is null-skipped")
+		dirs, _, _ := projtest.Walk(t, projtest.VenturiDirect(t, topo, fx.dbPath), nil)
+		assert.Equal(t, []string{
+			"vulns", "vulns/CVE-2021-44228", "vulns/CVE-2021-44228/_unnamed",
+			"vulns/CVE-2023-4966", "vulns/CVE-2023-4966/_unnamed",
+		}, dirs, "the name made of _parent renders empty, so each record is served as _unnamed")
 	},
 	"engine keeps empty leaves": func(t *testing.T, fx fixtures) {
 		topo := topology(t, `{"version":"v1","nodes":[{"name":"x","selector":"$","files":[{"name":"empty","content_template":"{{default .missing \"\"}}"},{"name":"source","content_template":""}]}]}`)

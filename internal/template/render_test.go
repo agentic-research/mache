@@ -47,7 +47,7 @@ func TestRender_GoldenPath(t *testing.T) {
 			name:   "first of empty",
 			tmpl:   "{{first .items}}",
 			values: map[string]any{"items": []any{}},
-			want:   "<no value>",
+			want:   "",
 		},
 		{
 			name:   "unquote strips Go string quotes",
@@ -184,12 +184,13 @@ func TestRender_Errors(t *testing.T) {
 	assert.Error(t, err, "malformed template should error")
 }
 
-// TestRender_MissingKeyRendersNoValue verifies Go's default behavior for
-// missing keys: they render as the string "<no value>" (not an error).
-func TestRender_MissingKeyRendersNoValue(t *testing.T) {
+// TestRender_MissingKeyRendersEmpty: a missing key prints nothing, not an
+// error and not Go's `<no value>` placeholder (mache-b33274). The cases are
+// in printable_test.go.
+func TestRender_MissingKeyRendersEmpty(t *testing.T) {
 	got, err := Render("{{.missing}}", map[string]any{})
 	require.NoError(t, err)
-	assert.Equal(t, "<no value>", got)
+	assert.Empty(t, got)
 }
 
 // TestRender_Caching verifies that repeated calls with the same template

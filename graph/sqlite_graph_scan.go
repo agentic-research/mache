@@ -320,38 +320,30 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 	for i := range scanVals {
 		scanPtrs[i] = &scanVals[i]
 	}
-	fields := make([]string, len(fieldPaths))
 
 	// Reusable result buffer for collectPathEntries
 	result := scanResult{claimed: map[string]bool{}}
 
 	count := 0
 	scanErrs := 0
-	nullSkips := 0
+	missingNameFields := 0
 	for rows.Next() {
 		if err := rows.Scan(scanPtrs...); err != nil {
 			scanErrs++
 			continue
 		}
 
-		// Check for NULL fields (records missing required template values)
-		skip := false
-		for i := range fieldPaths {
-			if !scanVals[i+1].Valid {
-				skip = true
-				break
-			}
-			fields[i] = scanVals[i+1].String
-		}
-		if skip {
-			nullSkips++
-			continue
-		}
-
-		// Build minimal values map and render schema path tree
+		// The fields the names need. One the record does not have stays
+		// absent, so the name renders empty and the record is kept as
+		// UnnamedName, as the engine keeps it. The scan used to drop such a
+		// record (mache-b33274).
 		values := make(map[string]any)
 		for i, path := range fieldPaths {
-			setNestedField(values, path, fields[i])
+			if scanVals[i+1].Valid {
+				setNestedField(values, path, scanVals[i+1].String)
+			} else {
+				missingNameFields++
+			}
 		}
 
 		refValues := typedRefValues(values, refFieldPaths, scanVals[1+len(fieldPaths):])
@@ -393,9 +385,11 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 	}
 
 	// Log skipped rows so data drops are visible
-	if scanErrs > 0 || nullSkips > 0 {
-		log.Printf("scan %q: %d records processed, %d scan errors, %d null-skipped",
-			rootName, count, scanErrs, nullSkips)
+	if scanErrs > 0 {
+		log.Printf("scan %q: %d records processed, %d scan errors", rootName, count, scanErrs)
+	}
+	if missingNameFields > 0 {
+		log.Printf("scan %q: %d name fields missing from their records; those records are served as %s", rootName, missingNameFields, UnnamedName)
 	}
 
 	// Final flush of remaining data
@@ -473,10 +467,11 @@ func (g *SQLiteGraph) recordTokens(result *scanResult) {
 // from its records answered no find_callers (mache-1bf0d8).
 func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values, refValues map[string]any, parentPath, recordID string, result *scanResult) {
 	for _, child := range level.children {
-		name, err := g.render(child.nameRaw, values)
-		if err != nil || name == "" {
+		rendered, err := g.render(child.nameRaw, values)
+		if err != nil {
 			continue
 		}
+		name, unnamed := NameOrUnnamed(rendered)
 
 		childPath := parentPath + "/" + SegmentEscape(name)
 		if len(child.files) > 0 {
@@ -495,8 +490,10 @@ func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values, refValues m
 			for _, f := range child.files {
 				result.entries = append(result.entries, pathEntry{parent: childPath, child: childPath + "/" + f.Name})
 			}
-			for _, token := range DefTokensForName(name) {
-				result.defs = append(result.defs, tokenAt{token: token, dir: childPath})
+			if !unnamed {
+				for _, token := range DefTokensForName(name) {
+					result.defs = append(result.defs, tokenAt{token: token, dir: childPath})
+				}
 			}
 		}
 

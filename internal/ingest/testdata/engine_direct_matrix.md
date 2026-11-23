@@ -14,8 +14,8 @@ answer is specified. See `engine_direct_matrix_test.go` for each case.
 | --- | --- | --- | --- | --- | --- |
 | baseline | one record per array element, a list-valued ref, distinct names | agree | agree | agree | agree |
 | same-name records | two records render the same directory (mache-299113) | agree | agree | agree | agree |
-| missing name field | a record lacks the field its directory name is made of | **differ** (2): `mods/a/<no value>` only on engine (node); … | **differ**: `mods/a/<no value>/doc` only on engine ("anonymous") | **differ**: `mods/a/<no value>` only on engine ([<no value>]) | **differ**: `Named` only on engine ([mods/a/<no value>]) |
-| nested selector | a child selects an array inside each record ($.tools[*]) | **differ** (8): `servers/notes` only on engine (node); … | **differ** (3): `servers/notes/read/desc` only on engine ("r"); … | **differ** (3): `servers/notes/read` only on engine ([read]); … | agree |
+| missing name field | a record lacks the field its directory name is made of | agree | agree | agree | agree |
+| nested selector | a child selects an array inside each record ($.tools[*]) | **differ** (10): `servers/notes/_unnamed` only on direct (node); … | **differ** (5): `servers/notes/_unnamed/desc` only on direct (""); … | **differ** (3): `servers/notes/read` only on engine ([read]); … | agree |
 | templated root | the root node's name is a template | **differ** (4): `x` only on engine (node); … | **differ** (2): `x/doc` only on engine ("dx"); … | agree | agree |
 | templated file name | a file's name is a template | **differ** (2): `mods/a/One/note.txt` only on engine (node); … | **differ**: `mods/a/One/note.txt` only on engine ("d1") | agree | agree |
 | empty content | a file whose template renders empty for one record | agree | agree | agree | agree |

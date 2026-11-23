@@ -46,7 +46,8 @@ Each has a sample in [`testdata/`](testdata) or next to it, and
 [`examples_test.go`](examples_test.go) projects every schema over its
 sample (the Venturi samples are the records as a JSON array; the test
 writes them into a `results` table). A field that is optional in the data is wrapped in
-`default` (see below) so a missing value renders empty, not `<no value>`.
+`default` (see below) where it needs a fallback value; a missing field with no
+`default` renders empty.
 
 #### NVD Schema
 
@@ -247,8 +248,8 @@ the wrong assumption renders empty or unchanged files rather than failing.
 
 **`default` takes the value FIRST.** `{{default .name "unknown"}}`.
 Reversed, as `{{default "" .name}}`, the first argument is always empty, so
-it always returns the second and the guard does nothing — a nil still
-renders as Go's literal `<no value>`, which is the case it was added for.
+it always returns the second and the guard does nothing — a nil renders
+empty, as it would with no guard at all.
 
 The order is invisible in an example where both arguments are meaningful,
 such as `{{default (dig "a.b" .) (dig "c.d" .)}}` for a source with two
@@ -306,9 +307,11 @@ queryable filesystem:
   directory of coordination files (`STATUS.md`, `MASTER-TRIAGE.md`,
   `SCORECARD.md`, `BEAD-PLAN.md`, `CYCLE-LOG.md`, per-dimension audits) into a single
   `.index.json`.
+
 - [`audit-schema.json`](audit-schema.json) — The topology schema that
   mounts that index (`findings/` with `title`/`severity`/`status`/`dimension`
   leaves).
+
 - [`test-audit/`](test-audit) — Sample `.audit/` input files for
   trying the indexer end-to-end:
 
@@ -355,7 +358,7 @@ honest:
   sample through the path its documented command takes (the direct SQL
   backend for Venturi dbs, the engine for JSON, a pinned-leyline parse
   for source), walks the whole tree, and fails on a node or leaf
-  rendered from a missing field (`<no value>`), on an empty leaf, and on
+  named from a missing field (`_unnamed`), on an empty leaf, and on
   a missing expected path. `TestEveryExampleHasACase` fails when a schema
   is added without a case.
 - `TestExamplesMirrorPresets` holds the preset copies to the presets.
