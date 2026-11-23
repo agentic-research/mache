@@ -575,6 +575,11 @@ func (w *SQLiteWriter) AddDef(token, dirID string) error {
 	return err
 }
 
+// IgnoresNodeChildren implements childrenIgnorer: AddNode writes a row that
+// names its parent in parent_id and never reads Node.Children, so a caller
+// has no reason to fetch a node's children before rewriting it.
+func (w *SQLiteWriter) IgnoresNodeChildren() bool { return true }
+
 func (w *SQLiteWriter) AddFileChildren(parent *graph.Node, files []*graph.Node) {
 	for _, f := range files {
 		w.AddNode(f)

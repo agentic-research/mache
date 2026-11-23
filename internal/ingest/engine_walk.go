@@ -364,6 +364,26 @@ func listChildrenTolerant(store IngestionTarget, id string) ([]string, error) {
 	return kids, nil
 }
 
+// childrenIgnorer is a target that does not store a node's children on the
+// node: it derives them from each child's own record of its parent, so the
+// Children of a node passed to AddNode are never read.
+type childrenIgnorer interface {
+	IgnoresNodeChildren() bool
+}
+
+// childrenToCarry is the children a directory node being rewritten must
+// carry so the rewrite does not drop them. A store that keeps children on
+// its nodes needs them read back; one that ignores Node.Children needs
+// nothing, and reading them anyway made `mache --out` quadratic: every
+// record listed all the children its shared parent had so far, twice, for a
+// result the store threw away (mache-35e730).
+func childrenToCarry(store IngestionTarget, id string) ([]string, error) {
+	if ig, ok := store.(childrenIgnorer); ok && ig.IgnoresNodeChildren() {
+		return nil, nil
+	}
+	return listChildrenTolerant(store, id)
+}
+
 // scopeClaimer arbitrates sibling schema nodes that match the same construct:
 // claimScope reports whether the scope node scopeID under parentPath is still
 // unclaimed, claiming it. The per-file bufferingTarget implements it; the
@@ -464,7 +484,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// node so Children is populated, every SQLite-backed store rebuilds from
 		// one row and leaves it nil. Reading the field made this merge inert on
 		// the build path while working in memory (mache-e3d9bb).
-		existingChildren, err := listChildrenTolerant(store, id)
+		existingChildren, err := childrenToCarry(store, id)
 		if err != nil {
 			return fmt.Errorf("list children of %s: %w", id, err)
 		}
@@ -624,7 +644,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// GetNode on any SQLite-backed one, so reading it here silently
 		// discarded the children the recursion had just added on the build path
 		// (mache-e3d9bb).
-		currentChildren, err := listChildrenTolerant(store, id)
+		currentChildren, err := childrenToCarry(store, id)
 		if err != nil {
 			return fmt.Errorf("list children of %s: %w", id, err)
 		}

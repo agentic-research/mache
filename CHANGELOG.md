@@ -31,6 +31,16 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`mache --out` on JSON data is linear again** (`mache-35e730`). Every
+  record re-listed all the children its shared parent directory had so far,
+  twice, from the index being written, and discarded the answer: the SQLite
+  writer derives children from each row's parent and never reads them from a
+  node. Time quadrupled with each doubling of the records: 16,000 took 295 s
+  on the reporter's machine and the 164,464-record Lean graph an estimated 28
+  hours, against 4 minutes for the same JSON in `mache serve`. 16,000 records
+  now take about 2 s where they took 29 s on the same machine, and the
+  database written is identical row for row.
+
 - **`get_overview` totals count the whole graph** (`mache-ddb631`, #820). For
   a data projection, `total_dirs` and `total_files` counted only the top two
   levels: 316 directories and 0 files for a graph of 164k and 658k. They are
