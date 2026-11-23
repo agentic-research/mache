@@ -166,6 +166,16 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **ley-line-open pin: v0.30.0 → v0.31.0, wire major 3** (`mache-1f85ec`).
+  Mache now requires a v0.31.0 daemon and refuses an older one at startup:
+  the daemon's `query` reply changed shape (rows are lists of cells), and the
+  two tools that read through it, `get_type_info` and `get_diagnostics` with
+  a `file`, would otherwise have received the new cells as if they were
+  values, with no error. The reply is decoded by ley-line's own typed client,
+  and a reply the daemon cut short is an error, not a partial answer. Parsed
+  databases are unaffected: the same tree parses identically under both
+  releases, so nothing is rebuilt.
+
 - **leyline v0.30.0 is the pinned backend** (`mache-d7b8db`). Tags `v0.30.0`
   and `clients/go/leyline-schema/v0.30.0` (commit `de638aea`); the four
   binary digests come from the release's `SHA256SUMS`, checked against the

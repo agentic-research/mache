@@ -187,72 +187,6 @@ func TestEnrich_ReturnsErrorOnFailure(t *testing.T) {
 	}
 }
 
-func TestQuery_ParsesRows(t *testing.T) {
-	sockPath := mockServer(t, func(req map[string]any) map[string]any {
-		return map[string]any{
-			"rows": []any{
-				[]any{"node_id_1", "hover text 1"},
-				[]any{"node_id_2", "hover text 2"},
-			},
-		}
-	})
-
-	client, err := DialSocket(sockPath)
-	if err != nil {
-		t.Fatalf("DialSocket: %v", err)
-	}
-	defer client.Close() //nolint:errcheck
-
-	rows, err := client.Query("SELECT node_id, hover_text FROM _lsp_hover")
-	if err != nil {
-		t.Fatalf("Query: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(rows))
-	}
-	if rows[0][0] != "node_id_1" {
-		t.Errorf("expected node_id_1, got %v", rows[0][0])
-	}
-}
-
-// TestQuery_ParsesObjectRows pins the daemon's ACTUAL wire shape: rows are
-// objects keyed by column name + a separate ordered `columns` array, NOT
-// arrays of values. The prior parser dropped every object row, which made
-// every daemon query return nothing — the root cause of LSP get_type_info
-// surfacing no hover despite enrichment populating _lsp_hover (mache-303036).
-func TestQuery_ParsesObjectRows(t *testing.T) {
-	sockPath := mockServer(t, func(req map[string]any) map[string]any {
-		return map[string]any{
-			"columns": []any{"node_id", "hover_text"},
-			"rows": []any{
-				map[string]any{"node_id": "symbols/config", "hover_text": "pub mod config"},
-				map[string]any{"node_id": "symbols/auth", "hover_text": "pub mod auth"},
-			},
-		}
-	})
-
-	client, err := DialSocket(sockPath)
-	if err != nil {
-		t.Fatalf("DialSocket: %v", err)
-	}
-	defer client.Close() //nolint:errcheck
-
-	rows, err := client.Query("SELECT node_id, hover_text FROM _lsp_hover")
-	if err != nil {
-		t.Fatalf("Query: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(rows))
-	}
-	// Object rows must be flattened in `columns` order: [node_id, hover_text].
-	if rows[0][0] != "symbols/config" || rows[0][1] != "pub mod config" {
-		t.Errorf("row0 mis-ordered: %v", rows[0])
-	}
-	if rows[1][0] != "symbols/auth" {
-		t.Errorf("row1[0] = %v, want symbols/auth", rows[1][0])
-	}
-}
-
 func TestDialSocket_ErrorOnMissingSocket(t *testing.T) {
 	_, err := DialSocket("/tmp/nonexistent-leyline-test.sock")
 	if err == nil {
@@ -1556,30 +1490,6 @@ func TestQuery_PropagatesSendOpError(t *testing.T) {
 
 	_, err = client.Query("SELECT 1")
 	require.Error(t, err, "Query must surface SendOp errors instead of returning (nil, nil)")
-}
-
-// TestQuery_UnexpectedRowsType pins the rows type-assertion failure
-// branch (L482-483 in commit 3c73e6b): when the daemon returns a `rows`
-// field whose JSON shape isn't `[]any` (e.g. a bare string from a
-// version-skewed daemon, or a future shape we haven't taught Query to
-// parse), Query must reject the response with a typed error rather than
-// panic on the assertion or silently return empty rows.
-func TestQuery_UnexpectedRowsType(t *testing.T) {
-	sockPath := mockServer(t, func(req map[string]any) map[string]any {
-		// Return a string where Query expects []any. JSON-decode of the
-		// response gives us resp["rows"] of dynamic type string, which
-		// fails the `rows.([]any)` assertion.
-		return map[string]any{"rows": "not-an-array"}
-	})
-
-	client, err := DialSocket(sockPath)
-	require.NoError(t, err)
-	defer client.Close() //nolint:errcheck
-
-	_, err = client.Query("SELECT 1")
-	require.Error(t, err, "Query must reject a non-[]any rows field")
-	assert.Contains(t, err.Error(), "unexpected rows type",
-		"error must name the surprise type so operators can fingerprint the daemon-version mismatch (got %q)", err.Error())
 }
 
 // TestSubscribe_WriteFailsOnExpiredDeadline pins the write-failure branch

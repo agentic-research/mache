@@ -818,60 +818,6 @@ func (c *SocketClient) Enrich(pass string, files []string) (map[string]any, erro
 	return resp, nil
 }
 
-// Query runs a SQL query against the active arena buffer via the `query` op
-// and returns the rows as [][]any (one slice per row, column order matching
-// the SELECT / the response's `columns` field).
-//
-// The daemon's `query` op returns each row as a JSON OBJECT keyed by column
-// name ({"node_id":..,"hover_text":..}), with a separate ordered `columns`
-// array — NOT an array of values. (A legacy array-of-arrays shape is also
-// accepted for forward/back-compat.) The prior parser only handled the
-// array shape and silently dropped every object row, so any query against
-// the daemon returned zero rows — which is exactly why LSP get_type_info
-// surfaced no hover even though enrichment populated _lsp_hover (mache-303036).
-func (c *SocketClient) Query(sql string) ([][]any, error) {
-	resp, err := c.SendOp(map[string]any{
-		"op":  "query",
-		"sql": sql,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if errMsg, ok := resp["error"]; ok {
-		return nil, fmt.Errorf("query: %v", errMsg)
-	}
-	rowsVal, hasRows := resp["rows"]
-	if !hasRows {
-		return nil, nil
-	}
-	rawRows, ok := rowsVal.([]any)
-	if !ok {
-		return nil, fmt.Errorf("unexpected rows type: %T", rowsVal)
-	}
-	// Ordered column names — used to flatten object-shaped rows in SELECT order.
-	var cols []string
-	if cv, ok := resp["columns"].([]any); ok {
-		cols = make([]string, len(cv))
-		for i, v := range cv {
-			cols[i] = fmt.Sprint(v)
-		}
-	}
-	result := make([][]any, 0, len(rawRows))
-	for _, r := range rawRows {
-		switch row := r.(type) {
-		case []any: // legacy array-of-values shape
-			result = append(result, row)
-		case map[string]any: // daemon shape: object keyed by column name
-			ordered := make([]any, len(cols))
-			for i, col := range cols {
-				ordered[i] = row[col]
-			}
-			result = append(result, ordered)
-		}
-	}
-	return result, nil
-}
-
 // SetDeadline sets the read/write deadline on the underlying connection.
 func (c *SocketClient) SetDeadline(t time.Time) error {
 	return c.conn.SetDeadline(t)
@@ -1294,12 +1240,30 @@ func (c *SocketClient) Prioritize(files []string) error {
 // the removed-variable refusal (mache-0be425) is not in this release. The
 // epoch-8 lineage bump (ADR-0048, mache-46d36d) is not in it either.
 //
+// v0.30.0 -> v0.31.0 moves the wire to major 3 (mache-1f85ec). The one shape
+// that changed is the `query` op: a row is a list of cells in column order,
+// a cell being {"text": ...} or {"null": null}, where it was an object keyed
+// by column name; a cut-short reply carries `truncation: {limit}` in place
+// of the top-level `truncated`/`limit`; and a request `limit` is a UInt32
+// (absent or 0 is the daemon's default, out of range is refused
+// `limit_out_of_range`). mache reads it with ley-line's typed client
+// (SocketClient.QueryResult) and sends no limit. Nothing mache parses moved:
+// one tree parsed by both gives projection-v13, merkle-ast-v3 and the same
+// 1,226,102 _ast rows, and 15 tool answers on mache's own source are
+// byte-identical, so persisted parse dbs are reused, not rebuilt. validate,
+// read_source and propose behave as on v0.30.0 (the real-daemon e2e tests
+// pass unchanged). Also in the release and NOT yet adopted here: `leyline
+// daemon --lifeline-fd` (mache-785423); a proposal whose edit touches a line
+// another writer changed is now refused `stale` (mache-12be3b); arena path
+// and shutdown fixes (mache-173446). ADR-0048 (projection-v14) and the
+// ADR-0049 config adoption are not in it.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.30.0"
+const leylineBinaryVersion = "v0.31.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
