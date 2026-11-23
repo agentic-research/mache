@@ -22,3 +22,18 @@ func TestDefTokensForName(t *testing.T) {
 	assert.Equal(t, []string{"trailing."}, DefTokensForName("trailing."), "a trailing dot has no segment after it")
 	assert.Equal(t, []string{""}, DefTokensForName(""))
 }
+
+// A name that renders empty is UnnamedName, so the directory never takes its
+// parent's ID; any other name is itself, including names that merely look
+// like it.
+func TestNameOrUnnamed(t *testing.T) {
+	name, unnamed := NameOrUnnamed("")
+	assert.Equal(t, UnnamedName, name)
+	assert.True(t, unnamed)
+
+	for _, rendered := range []string{"Alpha", " ", "_unnamed", "0", "<no value>"} {
+		name, unnamed := NameOrUnnamed(rendered)
+		assert.Equal(t, rendered, name, "%q", rendered)
+		assert.False(t, unnamed, "%q is a name, even if an odd one", rendered)
+	}
+}

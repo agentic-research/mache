@@ -52,10 +52,26 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A missing field renders empty, never as `<no value>`** (`mache-b33274`).
+  Go's template engine prints a missing map key as the text `<no value>`, so
+  a file could hold that text and a directory could be named it, a value no
+  record had. Every printing template action now prints a missing value as
+  empty; `default`, `if`, `range` and `with` behave as before.
+
+- **A record whose name renders empty is kept as `_unnamed`, with no symbol**
+  (`mache-b33274`). On the engine path it used to be a directory named
+  `<no value>`, which also defined `<no value>` as a symbol shared by every
+  such record; on the direct path the record was dropped. It now keeps its
+  files and references on both paths, defines nothing, and a second one is
+  `_unnamed.2`. The bash, css, dockerfile, markdown and sql presets name
+  some constructs from a field no walker sets, so those nodes move from
+  `<no value>` to `_unnamed`.
+
 - **A data source served straight from its records agrees with `mache --out`
   on three more things** (`mache-b33274`, `mache-299113`). Measured by a
   committed matrix of twelve planted cases
   (`internal/ingest/testdata/engine_direct_matrix.md`):
+
   - two records that render the same directory are both served, the second
     as `Name.2`, where the direct path served only one of them;
   - a name containing `/` or `%` is escaped the same way on both paths, where
@@ -210,6 +226,7 @@ bumps may include breaking changes.
   `get_sheaf_status.leyline` (the expected version, the resolved path and the
   version string); smells across the pin on an unchanged tree: 0 new, 0
   vanished. The baseline was not regenerated.
+
 - **A `.db` whose leyline projection mache does not know is refused, not
   warned about** (`mache-86e215`). Opening a db whose `_meta` declares a
   `projection_schema_version` outside the shapes mache has been checked
@@ -439,6 +456,7 @@ bumps may include breaking changes.
   mache also decodes `read_source` and `propose` with leyline-schema's own
   wire types (ley-line-open-247489) instead of a hand-kept copy, and an answer
   missing a field its outcome needs is an error rather than a zero value.
+
 - **Writes go through leyline's propose, never straight to disk**
   (`mache-3a0fb9`). A write to a node (the NFS mount or `write_file`) used
   to splice the bytes into the source file. mache now rebuilds the node's
@@ -528,11 +546,13 @@ bumps may include breaking changes.
   lineage is unchanged, so node hashes and the smell baseline still apply.
   The refusals that name the nid shape (`ErrNidProjection`, formerly
   `ErrProjectionV6`) now say "projection-v6 or later", since they apply to v7.
+
 - **The leyline daemon mache starts runs headless** (`mache-3a4713`). It was
   given `--mount ~/.mache/mount`, which nothing in mache read: on macOS a
   loopback NFS mount per daemon start, the mount type behind the Apple
   NFS-client panics, and which leyline v0.21.0 refuses below Tahoe 26.7 /
   Sequoia 15.8, where it would fail the daemon's start.
+
 - **Upgrading no longer leaves the daemon unable to start** (`mache-bc3c84`).
   mache reuses one arena, `~/.mache/default.arena`, and cold-starts it only
   when its recorded configuration changes; the leyline release was not part
@@ -631,6 +651,7 @@ bumps may include breaking changes.
   chunks are refused too, never served as an empty file. A tampered write base
   refuses the write instead of reading as "no base". A lint test fails if a
   new raw read of `blob_bytes` appears anywhere else.
+
 - **A write no longer drops its own file's nodes on the watcher path**
   (`mache-7eb099`). The file watcher treated any rename or remove event on a
   source file as a delete. leyline's daemon applies a write by replacing the
@@ -640,9 +661,11 @@ bumps may include breaking changes.
   `ok_graph_stale`. Editors that save atomically hit the same thing. A path
   that still holds a file is now re-indexed as a change; only a path that is
   gone deletes its nodes.
+
 - **Source text comes from the parse, never from the file on disk**
   (`mache-46c59d`). leyline leaves `_source.content` NULL and keeps the parsed
   bytes in `source_blobs` under `content_hash`. Three readers got this wrong:
+
   - The projection's walker read the file at `_source.path`, so a file edited
     after the parse was sliced with offsets from before the edit. That is what
     `mache serve`'s watcher re-projected on every edit, since the served parse
@@ -653,10 +676,10 @@ bumps may include breaking changes.
     an error, not silently left out of the cache entry.
   - `find_smells` snippets read only `_source.content`, so they were empty on
     every leyline-built db.
-  All three now read the bytes the parse saw (`lloschema.SourceBytesExpr`).
-  fixturedb writes `_source` the way leyline does (`source_blobs`, now in both
-  schema mirrors, derived from the real binaries), which is why the tests had
-  passed: the fixtures stored the bytes inline.
+    All three now read the bytes the parse saw (`lloschema.SourceBytesExpr`).
+    fixturedb writes `_source` the way leyline does (`source_blobs`, now in both
+    schema mirrors, derived from the real binaries), which is why the tests had
+    passed: the fixtures stored the bytes inline.
 
 - **Stopping mache's leyline daemon no longer races the goroutine that reaps
   it** (`mache-144496`). Each daemon mache starts has one goroutine waiting on
@@ -774,6 +797,7 @@ bumps may include breaking changes.
   resolver the NFS mount already used, from either projection, and serving no
   longer writes callers, callees or the schema into the `.db` it is given
   (schema-declared content sources still are). Two consequences:
+
   - A `callers/` entry is named for the caller's node id
     (`a.go_function_declaration_1_block_call_expression`), as on the mount,
     and `read_file` on it reads that node.

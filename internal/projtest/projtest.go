@@ -97,7 +97,7 @@ func LeylineSource(t *testing.T, topo *api.Topology, src string) graph.Graph {
 
 // Walk visits every node under the root, as a reader of the mount would, and
 // returns the directory and leaf paths it saw and what it found wrong: a node
-// named from a field the record does not have (`<no value>`), a leaf whose
+// named from a field the record does not have (graph.UnnamedName), a leaf whose
 // content contains one, and a leaf that renders empty. Leaves whose base name
 // is in nullable may render empty.
 func Walk(t *testing.T, g graph.Graph, nullable []string) (dirs, leaves, problems []string) {
@@ -108,7 +108,7 @@ func Walk(t *testing.T, g graph.Graph, nullable []string) (dirs, leaves, problem
 		require.NoError(t, err, "list %q", id)
 		for _, child := range children {
 			name := filepath.Base(child)
-			if strings.Contains(name, "<no value>") {
+			if name == graph.UnnamedName || strings.HasPrefix(name, graph.UnnamedName+".") {
 				problems = append(problems, child+": named from a missing field")
 			}
 			node, err := g.GetNode(child)

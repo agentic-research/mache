@@ -38,10 +38,12 @@ func TestWalk(t *testing.T) {
 	_, leaves, problems := projtest.Walk(t, projtest.JSONDocument(t, topo, dir+"/d.json"), []string{"c"})
 
 	assert.Len(t, leaves, 3)
+	// A missing field renders as nothing (mache-b33274): the root is kept as
+	// _unnamed, and `a`, made of a missing field, is an empty file.
 	assert.ElementsMatch(t, []string{
-		"<no value>: named from a missing field",
-		"<no value>/a: content rendered from a missing field",
-		"<no value>/b: renders empty",
+		"_unnamed: named from a missing field",
+		"_unnamed/a: renders empty",
+		"_unnamed/b: renders empty",
 	}, problems)
 }
 

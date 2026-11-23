@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"text/template/parse"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -26,6 +27,7 @@ import (
 
 // Funcs is the standard set of template functions available in all mache schemas.
 var Funcs = template.FuncMap{
+	printableFunc: printable,
 	"json": func(v any) string {
 		b, err := json.Marshal(v)
 		if err != nil {
@@ -205,7 +207,7 @@ func Render(tmpl string, values map[string]any) (string, error) {
 		t = cached.(*template.Template)
 	} else {
 		var err error
-		t, err = template.New("").Funcs(Funcs).Parse(tmpl)
+		t, err = parseTemplate(tmpl, Funcs)
 		if err != nil {
 			return "", err
 		}
@@ -233,7 +235,7 @@ func RenderWithFuncs(tmpl string, values map[string]any, extraFuncs template.Fun
 		maps.Copy(merged, Funcs)
 		maps.Copy(merged, extraFuncs)
 		var err error
-		t, err = template.New("").Funcs(merged).Parse(tmpl)
+		t, err = parseTemplate(tmpl, merged)
 		if err != nil {
 			return "", err
 		}
@@ -246,4 +248,81 @@ func RenderWithFuncs(tmpl string, values map[string]any, extraFuncs template.Fun
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// A template prints nothing for a field the data does not have.
+//
+// Go's text/template prints a missing map key as the text `<no value>`, and
+// has no option to print nothing (missingkey=zero still prints it for a
+// map[string]any). For mache that is invented data: a file whose content
+// says `<no value>`, or a directory named it, holding a value no record had.
+// A directory named `<no value>` also defines `<no value>` as a symbol, the
+// same one for every record missing the field (mache-b33274).
+//
+// So after parsing, every action that prints is rewritten to pass its value
+// through printable last: {{.owner}} runs as {{.owner | printable}}. A
+// missing value prints as empty; everything else prints as before. Control
+// structures ({{if}}, {{range}}, {{with}}) are not touched, so a missing
+// field is still false, still ranges zero times, and `default` still sees
+// it as missing. Only output changes. The rewrite is on the parse tree, not
+// the template text.
+const printableFunc = "machePrintable"
+
+// printable is the last command of every printing action.
+func printable(v any) any {
+	if v == nil {
+		return ""
+	}
+	return v
+}
+
+// printableCmd is the command appended to each printing action, taken from
+// a template that calls it, so it is a well-formed node of the parse tree.
+var printableCmd = func() *parse.CommandNode {
+	t := template.Must(template.New("").Funcs(template.FuncMap{printableFunc: printable}).Parse("{{" + printableFunc + "}}"))
+	return t.Root.Nodes[0].(*parse.ActionNode).Pipe.Cmds[0]
+}()
+
+// parseTemplate parses tmpl with funcs and makes every printing action print
+// a missing value as empty.
+func parseTemplate(tmpl string, funcs template.FuncMap) (*template.Template, error) {
+	t, err := template.New("").Funcs(funcs).Parse(tmpl)
+	if err != nil {
+		return nil, err
+	}
+	for _, defined := range t.Templates() {
+		if defined.Tree != nil {
+			printMissingAsEmpty(defined.Root)
+		}
+	}
+	return t, nil
+}
+
+// printMissingAsEmpty appends printableCmd to every action under n that
+// prints. An action that declares or assigns a variable prints nothing, so
+// it keeps its value: {{$x := .missing}} leaves $x missing, and {{$x}}
+// prints empty.
+func printMissingAsEmpty(n parse.Node) {
+	switch x := n.(type) {
+	case *parse.ListNode:
+		if x == nil {
+			return
+		}
+		for _, c := range x.Nodes {
+			printMissingAsEmpty(c)
+		}
+	case *parse.ActionNode:
+		if len(x.Pipe.Decl) == 0 {
+			x.Pipe.Cmds = append(x.Pipe.Cmds, printableCmd)
+		}
+	case *parse.IfNode:
+		printMissingAsEmpty(x.List)
+		printMissingAsEmpty(x.ElseList)
+	case *parse.RangeNode:
+		printMissingAsEmpty(x.List)
+		printMissingAsEmpty(x.ElseList)
+	case *parse.WithNode:
+		printMissingAsEmpty(x.List)
+		printMissingAsEmpty(x.ElseList)
+	}
 }

@@ -36,14 +36,13 @@ The same schema file drives three different engines, and they do not behave
 identically. The rest of this page says "data (engine)", "data (direct)" or
 "source" when a rule is specific to one of them.
 
-| Kind              | Source                                                             | What runs it                                                                                                                  | Reached by                                                                      |
-| ----------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| **data (engine)** | a `.json` file, or a directory of `.json` files                    | `ingest.Engine` with `JsonWalker` ([`engine_walk.go`](../../internal/ingest/engine_walk.go))                                  | `mache serve --schema S x.json`, `mache --schema S --data x.json <mountpoint>`  |
-| **data (direct)** | a `.db` whose `results(id, record)` table holds one JSON per row   | `graph.SQLiteGraph` ([`sqlite_graph_scan.go`](../../graph/sqlite_graph_scan.go)) — no ingestion, the db is read on demand     | `mache serve --schema S x.db`, `mache --schema S --data x.db <mountpoint>`      |
+| Kind              | Source                                                               | What runs it                                                                                                                | Reached by                                                                     |
+| ----------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| **data (engine)** | a `.json` file, or a directory of `.json` files                      | `ingest.Engine` with `JsonWalker` ([`engine_walk.go`](../../internal/ingest/engine_walk.go))                                | `mache serve --schema S x.json`, `mache --schema S --data x.json <mountpoint>` |
+| **data (direct)** | a `.db` whose `results(id, record)` table holds one JSON per row     | `graph.SQLiteGraph` ([`sqlite_graph_scan.go`](../../graph/sqlite_graph_scan.go)) — no ingestion, the db is read on demand   | `mache serve --schema S x.db`, `mache --schema S --data x.db <mountpoint>`     |
 | **source**        | a directory of source code, parsed by the pinned leyline into `_ast` | `ingest.Engine` with `ASTWalker` ([`ast_walker.go`](../../internal/ingest/ast_walker.go)); no tree-sitter runs inside mache | `mache build --schema S src out.db`, `mache serve <dir>`, `mache <mountpoint>` |
 
-There is a fourth path, **data (engine) over a `.db`**: `mache --data x.db
---out` streams the `results` table through the engine
+There is a fourth path, **data (engine) over a `.db`**: `mache --data x.db --out` streams the `results` table through the engine
 ([`engine_sqlite.go`](../../internal/ingest/engine_sqlite.go)). It is called
 out below where it differs from the direct path.
 
@@ -335,12 +334,12 @@ Instead of a template, the name of an auxiliary table that supplies the
 content, joined to construct directories by symbol name. Accepted values and
 their tables ([`leylinegraph.go`](../../internal/leylinegraph/leyline.go)):
 
-| Value             | Table           | Content                           |
-| ----------------- | --------------- | --------------------------------- |
-| `lsp_hover`       | `_lsp_hover`    | `hover_text`                      |
-| `lsp_diagnostics` | `_lsp`          | `diagnostics`, non-empty rows     |
-| `lsp_defs`        | `_lsp_defs`     | JSON array of definitions         |
-| `lsp_refs`        | `_lsp_refs`     | JSON array of references          |
+| Value             | Table        | Content                       |
+| ----------------- | ------------ | ----------------------------- |
+| `lsp_hover`       | `_lsp_hover` | `hover_text`                  |
+| `lsp_diagnostics` | `_lsp`       | `diagnostics`, non-empty rows |
+| `lsp_defs`        | `_lsp_defs`  | JSON array of definitions     |
+| `lsp_refs`        | `_lsp_refs`  | JSON array of references      |
 
 Any other value is an error at materialization. The tables come from
 leyline's LSP pass (`leyline lsp --merge-db`); when a table is absent the leaf
@@ -547,8 +546,9 @@ demo/types/Config/source = Config struct{ Name string }
 ```
 
 `Greet/source` holds the comment and the function. The two `init` functions
-have no comment, so their `doc` renders empty and is dropped; without the
-`default` it would read `<no value>` (see [Template context](#template-context)).
+have no comment, so their `doc` renders empty and is kept as an empty file. A
+missing field renders empty with or without the `default` (see
+[Template context](#template-context)).
 `Config/source` has no `type` keyword: the `@scope` is the `type_spec` (the
 contract [`docs/schemas/go.md`](../schemas/go.md) describes). The two `init`
 directories are explained under [Naming and dedup](#naming-and-dedup).
@@ -560,8 +560,9 @@ Names, content and refs are Go `text/template` strings. `.` is a
 
 **data (engine):** the fields of the matched JSON object, or `{"value": …}`
 for a non-object. Nested fields chain: `{{.item.cve.id}}`. A field that is
-absent renders `<no value>`; wrap optional fields in `default`
-(`{{default .owner ""}}`) or use `dig`.
+absent renders empty, on every path: Go's `<no value>` placeholder is never
+printed, since it is text no record held. Use `default` for a fallback value
+(`{{default .owner "unknown"}}`) or `dig` for a path through lists.
 
 **data (direct):** a name template sees only the fields it mentions, as
 strings, fetched by `json_extract`; a content template sees the whole record
@@ -571,23 +572,25 @@ as parsed JSON. For a Venturi db that is `.schema`, `.identifier` and
 **source:** the captures of the selector by name (`{{.name}}`,
 `{{.receiver}}`), plus:
 
-| Key      | Value                                                                                                                                     |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `scope`  | the source text of the `@scope` node                                                                                                      |
-| `doc`    | the comment block immediately above the scope, set for content templates only, not for names — and only when there is one: `{{.doc}}` on an undocumented construct renders `<no value>`, so write `{{default .doc ""}}` (`mache-5a1f21`) |
+| Key     | Value                                                                                                                                                                                             |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scope` | the source text of the `@scope` node                                                                                                                                                              |
+| `doc`   | the comment block immediately above the scope, set for content templates only, not for names — and only when there is one: `{{.doc}}` on an undocumented construct renders empty (`mache-5a1f21`) |
 
 A capture's text is the node's `record` from `_ast` when leyline stored one,
 else its byte span of the file. There is no `index`: the `{{.index}}` the
 bash, css, dockerfile, markdown, sql and other presets use for unnamed
-constructs is set by no walker, so those nodes render as `<no value>`
-(`mache-fa8b02`).
+constructs is set by no walker, so those names render empty and the nodes are
+served as `_unnamed`, `_unnamed.2`, … with no symbol (`mache-fa8b02`).
 
 **`_parent`** (data (engine) and source): a child node's templates see the
 parent match's values under `_parent`, and it nests
 (`{{._parent._parent.item.id}}`). `_parent` is a reserved key; a data field
 of that name is shadowed. Root matches have no `_parent`. The direct path
 does not inject it: a name template that mentions `_parent` asks
-`json_extract` for a `$._parent…` path, finds NULL, and skips every record.
+`json_extract` for a `$._parent…` path, finds nothing, and the name renders
+empty, so every record is served as `_unnamed` (see
+[Naming and dedup](#naming-and-dedup)).
 
 ```json schema:data
 {
@@ -660,6 +663,12 @@ A node's ID is its path: the parent's ID, `/`, the rendered name
 the same name under the same parent want the same ID, and what happens
 depends on whether the node has `files`.
 
+- **A name that renders empty** (usually a missing field) is `_unnamed`. The
+  record is kept with its files and references, but it defines no symbol,
+  since it has no name. Further unnamed constructs under one parent follow
+  the rules below (`_unnamed.2`, …), on every path. It used to be a directory
+  named `<no value>`, which defined that text as a symbol, or on the direct
+  path, a dropped record.
 - **Containers** (no `files`) merge. Every `.go` file in a package renders
   `{{.pkg}}` to the same name, so the package directory is one directory with
   everyone's children. Static-named containers under a root are the same.
