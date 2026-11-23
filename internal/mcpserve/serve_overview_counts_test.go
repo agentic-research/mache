@@ -109,23 +109,99 @@ func TestGetOverview_TotalsCountTheWholeGraph(t *testing.T) {
 	}
 }
 
+// callCounter counts the calls a graph is asked for, by kind.
+type callCounter struct {
+	graph.Graph
+	getNode, listChildren, listStats int
+}
+
+func (c *callCounter) GetNode(id string) (*graph.Node, error) {
+	c.getNode++
+	return c.Graph.GetNode(id)
+}
+
+func (c *callCounter) ListChildren(id string) ([]string, error) {
+	c.listChildren++
+	return c.Graph.ListChildren(id)
+}
+
+func (c *callCounter) ListChildStats(id string) ([]graph.NodeStat, error) {
+	c.listStats++
+	return c.Graph.ListChildStats(id)
+}
+
+// NodeCounts forwards to the wrapped graph when it can count itself.
+func (c *callCounter) NodeCounts() (dirs, files int, err error) {
+	if nc, ok := c.Graph.(graph.NodeCounter); ok {
+		return nc.NodeCounts()
+	}
+	return 0, 0, graph.ErrNodeCountUnavailable
+}
+
 // A walk that stops at its cap says so: a partial count is a lower bound,
-// not a total.
-func TestWalkCounts_ReportsTruncation(t *testing.T) {
+// not a total. And the cap is on directory listings, the unit of cost.
+func TestWalkCounts_StopsAtItsListingCapAndSaysSo(t *testing.T) {
 	schema, dataPath := deepFixture(t)
 	store := graph.NewMemoryStore()
 	require.NoError(t, ingest.NewEngine(schema, store).Ingest(dataPath))
 	roots, err := store.ListChildren("")
 	require.NoError(t, err)
 
-	dirs, files, truncated := walkCounts(store, roots, 5)
+	counted := &callCounter{Graph: store}
+	dirs, files, truncated := walkCounts(counted, roots, 3)
 	assert.True(t, truncated)
-	assert.Equal(t, 5, dirs+files)
+	assert.Equal(t, 3, counted.listStats+counted.listChildren, "exactly the cap in directory listings")
+	assert.Less(t, dirs+files, deepDirs+deepFiles)
+	assert.Positive(t, dirs)
 
-	dirs, files, truncated = walkCounts(store, roots, deepDirs+deepFiles)
-	assert.False(t, truncated, "a walk that visits exactly every node is complete")
+	counted = &callCounter{Graph: store}
+	dirs, files, truncated = walkCounts(counted, roots, deepDirs)
+	assert.False(t, truncated, "a walk that lists exactly every directory is complete")
 	assert.Equal(t, deepDirs, dirs)
 	assert.Equal(t, deepFiles, files)
+	assert.LessOrEqual(t, counted.getNode, len(roots), "files are counted from their parent's listing, not looked up")
+}
+
+// noStats is a graph whose ListChildStats answers nothing, as SQLiteWriter's
+// does: the walk must still count it, by listing and looking up.
+type noStats struct{ graph.Graph }
+
+func (noStats) ListChildStats(string) ([]graph.NodeStat, error) { return nil, nil }
+
+func TestWalkCounts_WithoutChildStatsStillCountsExactly(t *testing.T) {
+	schema, dataPath := deepFixture(t)
+	store := graph.NewMemoryStore()
+	require.NoError(t, ingest.NewEngine(schema, store).Ingest(dataPath))
+	roots, err := store.ListChildren("")
+	require.NoError(t, err)
+	dirs, files, truncated := walkCounts(noStats{store}, roots, maxOverviewListings)
+	assert.False(t, truncated)
+	assert.Equal(t, deepDirs, dirs)
+	assert.Equal(t, deepFiles, files)
+}
+
+// In --mount mode get_overview's totals are the sum of each mount's own,
+// plus the directory each mount appears as, and cost each mount one count:
+// no walk. They were a 100,000-node walk of the composite, 14s per call on
+// mache's own tree (mache-553d34).
+func TestGetOverview_MountTotalsAreTheSumOfTheMountsWithoutAWalk(t *testing.T) {
+	schema, dataPath := deepFixture(t)
+	build := func() *callCounter {
+		store := graph.NewMemoryStore()
+		require.NoError(t, ingest.NewEngine(schema, store).Ingest(dataPath))
+		return &callCounter{Graph: store}
+	}
+	a, b := build(), build()
+	composite := graph.NewCompositeGraph()
+	require.NoError(t, composite.Mount("alpha", a))
+	require.NoError(t, composite.Mount("beta", b))
+
+	got := overviewTotalsOf(t, servedGraph(composite))
+	assert.Equal(t, overviewTotals{TotalDirs: 2*deepDirs + 2, TotalFiles: 2 * deepFiles}, got)
+	for name, m := range map[string]*callCounter{"alpha": a, "beta": b} {
+		assert.Zero(t, m.listStats, "%s was walked", name)
+		assert.LessOrEqual(t, m.getNode+m.listChildren, 8, "%s: more than the root listing and the top-level summary", name)
+	}
 }
 
 // find_callers documents `token`; get_impact, find_definition and

@@ -32,6 +32,7 @@ var capabilityInterfaces = map[string]reflect.Type{
 	"RefsQuerier":            reflect.TypeFor[graph.RefsQuerier](),
 	"DBPathProvider":         reflect.TypeFor[graph.DBPathProvider](),
 	"MountPrefixer":          reflect.TypeFor[graph.MountPrefixer](),
+	"MountLister":            reflect.TypeFor[graph.MountLister](),
 	"RefResolver":            reflect.TypeFor[graph.RefResolver](),
 	"ASTKinder":              reflect.TypeFor[graph.ASTKinder](),
 	"DefTokener":             reflect.TypeFor[graph.DefTokener](),

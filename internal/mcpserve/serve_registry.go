@@ -1211,6 +1211,20 @@ func (lg *lazyGraph) MountPrefixOf(id string) string {
 	return ""
 }
 
+// Mounts forwards graph.MountLister to the base graph, so get_overview sums
+// each mount's own totals in --mount mode. A base that is not a composite
+// has no mounts.
+func (lg *lazyGraph) Mounts() map[string]graph.Graph {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil
+	}
+	if ml, ok := g.(graph.MountLister); ok {
+		return ml.Mounts()
+	}
+	return nil
+}
+
 // LookupDef forwards the optional graph.DefsLookuper interface so
 // find_definition's anchored-exact path can use the O(1) lookup
 // instead of falling through to the O(N) DefsMap snapshot. Without

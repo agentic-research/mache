@@ -114,6 +114,13 @@ type MountPrefixer interface {
 	MountPrefixOf(id string) string
 }
 
+// MountLister exposes the graphs a composite is made of, by mount name, for a
+// consumer whose answer is the sum of each mount's own (get_overview's
+// totals). A graph that is not a composite has none.
+type MountLister interface {
+	Mounts() map[string]Graph
+}
+
 // RefResolver answers the two questions a reference-walking consumer asks that
 // [Graph] does not: where is this reference in the file, and what definition
 // does it point at.

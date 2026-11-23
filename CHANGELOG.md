@@ -31,6 +31,15 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`get_overview` is fast again in `--mount` mode** (`mache-553d34`). Making
+  its totals exact (`mache-ddb631`) sent every graph that cannot count itself
+  down a 100,000-node walk with a lookup per node, and a `--mount` composite
+  is one: 14 s per call on mache's own tree, for the tool agents call first.
+  A composite's totals are now the sum of its mounts' own (0.2 s, and equal to
+  serving each tree alone), and the fallback walk is bounded by 2,000
+  directory listings, reading child kinds from each listing. A walk that stops
+  there still sets `totals_truncated`.
+
 - **`mache --out` on JSON data is linear again** (`mache-35e730`). Every
   record re-listed all the children its shared parent directory had so far,
   twice, from the index being written, and discarded the answer: the SQLite
