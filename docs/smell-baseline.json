@@ -2346,7 +2346,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "5a6ca2ba7997a02dd5157189728b449ffa08ecc6d6ca8d1ecc7acfb33fefa1a0",
+      "node_hash": "07db666e7f7ff43cc5d04efef2a5b12bfb78bb5d6119865e41e5f9439a452905",
       "count": 1
     },
     {
@@ -2618,7 +2618,7 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "5a6ca2ba7997a02dd5157189728b449ffa08ecc6d6ca8d1ecc7acfb33fefa1a0",
+      "node_hash": "07db666e7f7ff43cc5d04efef2a5b12bfb78bb5d6119865e41e5f9439a452905",
       "count": 1
     },
     {
