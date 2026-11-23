@@ -12,6 +12,8 @@ import (
 	"text/template"
 	"text/template/parse"
 
+	"github.com/agentic-research/mache/api"
+
 	machetemplate "github.com/agentic-research/mache/internal/template"
 )
 
@@ -144,6 +146,11 @@ func collectNameTemplates(level *schemaLevel) []string {
 	walk = func(l *schemaLevel) {
 		if !l.isStatic {
 			tmpls = append(tmpls, l.nameRaw)
+		}
+		for _, f := range l.files {
+			if isTemplated(f.Name) {
+				tmpls = append(tmpls, f.Name)
+			}
 		}
 		for _, c := range l.children {
 			walk(c)
@@ -459,6 +466,26 @@ func (g *SQLiteGraph) recordTokens(result *scanResult) {
 	}
 }
 
+// isTemplated reports whether a schema name is a template.
+func isTemplated(name string) bool { return strings.Contains(name, "{{") }
+
+// fileName is a leaf's name in one record's directory: rendered when the
+// schema's name is a template, as the engine renders it, escaped to one
+// segment, and UnnamedName when it renders empty. The direct path used to
+// write a templated name verbatim, `{{.kind}}.txt`, and no lookup could
+// reach it (mache-56ff85).
+func (g *SQLiteGraph) fileName(f *api.Leaf, values map[string]any) string {
+	if !isTemplated(f.Name) {
+		return f.Name
+	}
+	rendered, err := g.render(f.Name, values)
+	if err != nil {
+		rendered = ""
+	}
+	name, _ := NameOrUnnamed(rendered)
+	return SegmentEscape(name)
+}
+
 // collectPathEntries walks the schema children for one record, producing
 // parent→child entries, leaf directory→recordID mappings, and the tokens each
 // node defines and references. A directory with files defines its name, as
@@ -487,8 +514,12 @@ func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values, refValues m
 		// Leaf directory: add file children and record mapping
 		if len(child.files) > 0 {
 			result.leafDirs = append(result.leafDirs, leafMapping{dirPath: childPath, recordID: recordID})
-			for _, f := range child.files {
-				result.entries = append(result.entries, pathEntry{parent: childPath, child: childPath + "/" + f.Name})
+			for i := range child.files {
+				filePath := childPath + "/" + g.fileName(&child.files[i], values)
+				result.entries = append(result.entries, pathEntry{parent: childPath, child: filePath})
+				if isTemplated(child.files[i].Name) {
+					g.templatedLeaves.Store(filePath, &child.files[i])
+				}
 			}
 			if !unnamed {
 				for _, token := range DefTokensForName(name) {

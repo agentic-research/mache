@@ -52,6 +52,15 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **The direct data path renders templated file names, and refuses the two
+  schema features it cannot honour** (`mache-b33274`). A file named
+  `{{.kind}}.txt` is rendered per record, where the direct path used to write
+  the template text as the name and no lookup reached it. A selector inside a
+  record (`$.tools[*]`, a filter) and a templated root name are refused when
+  the db is opened, naming the node and pointing to `mache --out`; they used
+  to be accepted and served as a partial tree. The engine/direct matrix now
+  has no unexplained disagreement: ten cases agree and two are refusals.
+
 - **A missing field renders empty, never as `<no value>`** (`mache-b33274`).
   Go's template engine prints a missing map key as the text `<no value>`, so
   a file could hold that text and a directory could be named it, a value no
