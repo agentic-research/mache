@@ -33,6 +33,9 @@ type cloneMember struct {
 	Test bool `json:"test,omitempty"`
 	// span is the copy's byte range, which the snippet is read from.
 	startByte, endByte int
+	// key is the copy's node as the rule returned it, which its syntax
+	// nodes are read by.
+	key any
 }
 
 // cloneSet is functions that are structural copies of each other.
@@ -48,6 +51,22 @@ type cloneSet struct {
 	// one. Sets are ranked by it.
 	RemovableNodes int64         `json:"removable_nodes"`
 	Members        []cloneMember `json:"members"`
+
+	// IdenticalModuloRenames says the copies are the same code apart from
+	// what each calls its own name, parameters and locals: one helper can
+	// replace them as they stand. False when Differences is non-empty, and
+	// when the copies could not be compared.
+	IdenticalModuloRenames bool `json:"identical_modulo_renames"`
+	// RenamedPositions counts the places where copies differ only by such a
+	// renaming. They are not listed.
+	RenamedPositions int `json:"renamed_positions,omitempty"`
+	// Differences is every other place the copies disagree: a helper must
+	// take each as a parameter, or the copies do not do the same thing.
+	Differences          []cloneDifference `json:"differences,omitempty"`
+	DifferencesTruncated bool              `json:"differences_truncated,omitempty"`
+	// DifferencesUnavailable says why the copies were not compared.
+	DifferencesUnavailable string `json:"differences_unavailable,omitempty"`
+	differenceCount        int
 }
 
 // clonesResponse is find_clones' answer.
@@ -130,6 +149,7 @@ func MakeFindClonesHandler(g graph.Graph) server.ToolHandlerFunc {
 			sets, resp.Truncated = sets[:q.limit], true
 		}
 		resp.Sets = withSnippets(scan, sets)
+		describeDifferences(scan, resp.Sets)
 		return mcp.NewToolResultText(jsonOrPanic(resp)), nil
 	}
 }
@@ -175,7 +195,7 @@ func newCloneSet(id string, copies []smellFinding, q cloneQuery) (cloneSet, bool
 		set.Nodes = f.Metric
 		set.Members = append(set.Members, cloneMember{
 			SourceID: f.SourceID, Line: f.Line, NodeID: f.NodeID, Test: test,
-			startByte: f.StartByte, endByte: f.EndByte,
+			startByte: f.StartByte, endByte: f.EndByte, key: f.key,
 		})
 	}
 	if len(copies) < 2 || !inSource || (!q.includeTests && production < 2) {
