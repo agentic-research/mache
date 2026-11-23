@@ -1,8 +1,6 @@
 package graph
 
 import (
-	"database/sql"
-	"errors"
 	"fmt"
 
 	"github.com/agentic-research/mache/internal/lloschema"
@@ -146,19 +144,24 @@ func (g *SQLiteGraph) ASTKindChain(id string) ([]string, bool, error) {
 
 var _ DefTokener = (*SQLiteGraph)(nil)
 
-// DefTokenOf implements [DefTokener].
-func (g *SQLiteGraph) DefTokenOf(id string) (string, bool, error) {
+// DefTokensOf implements [DefTokener].
+func (g *SQLiteGraph) DefTokensOf(id string) ([]string, error) {
 	key, ok, err := g.key(id)
 	if err != nil || !ok {
-		return "", false, err
+		return nil, err
 	}
-	var token string
-	err = g.db.QueryRow("SELECT token FROM node_defs WHERE "+g.shape().defNode()+" = ? LIMIT 1", key).Scan(&token)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
+	rows, err := g.db.Query("SELECT DISTINCT token FROM node_defs WHERE "+g.shape().defNode()+" = ? AND token != '' ORDER BY token", key)
 	if err != nil {
-		return "", false, fmt.Errorf("token of %s: %w", id, err)
+		return nil, fmt.Errorf("tokens of %s: %w", id, err)
 	}
-	return token, token != "", nil
+	defer func() { _ = rows.Close() }()
+	var tokens []string
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			return nil, fmt.Errorf("tokens of %s: %w", id, err)
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens, rows.Err()
 }

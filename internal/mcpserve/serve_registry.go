@@ -1339,18 +1339,18 @@ func (lg *lazyGraph) ResolveRef(nodeID string) (*graph.RefTarget, error) {
 	return rr.ResolveRef(nodeID)
 }
 
-// DefTokenOf forwards graph.DefTokener to the base graph. A base that is not
-// a DefTokener knows no definitions: no token.
-func (lg *lazyGraph) DefTokenOf(id string) (string, bool, error) {
+// DefTokensOf forwards graph.DefTokener to the base graph. A base that is not
+// a DefTokener knows no definitions: no tokens.
+func (lg *lazyGraph) DefTokensOf(id string) ([]string, error) {
 	g, err := lg.get()
 	if err != nil || g == nil {
-		return "", false, err
+		return nil, err
 	}
 	dt, ok := g.(graph.DefTokener)
 	if !ok {
-		return "", false, nil
+		return nil, nil
 	}
-	return dt.DefTokenOf(id)
+	return dt.DefTokensOf(id)
 }
 
 // ASTKindChain forwards graph.ASTKinder to the base graph, which is what the

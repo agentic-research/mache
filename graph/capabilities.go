@@ -150,14 +150,20 @@ type ASTKinder interface {
 	ASTKindChain(id string) (chain []string, ok bool, err error)
 }
 
-// DefTokener reports the symbol a node defines: the token node_defs records
+// DefTokener reports the symbols a node defines: the tokens node_defs records
 // for it. A node id says nothing about its symbol on a leyline projection
 // (it ends in a tree-sitter kind), and on projection-v6 it is an integer the
 // caller never sees, so the answer has to come from the backend.
+//
+// A node can define more than one: a module is known by its full name and
+// its short one, a method by Type.Method and Method. All of them, because a
+// reference may use any of them. This returned one, chosen by storage order,
+// and a caller that followed it missed every reference made under another
+// (mache-61faa0).
 type DefTokener interface {
-	// DefTokenOf returns the token node_defs records for the node at id; ok
-	// is false when the node defines nothing.
-	DefTokenOf(id string) (token string, ok bool, err error)
+	// DefTokensOf returns every token node_defs records for the node at id,
+	// sorted; none when the node defines nothing.
+	DefTokensOf(id string) (tokens []string, err error)
 }
 
 // ContentHasher reports the content identity ley-line-open's sheaf region

@@ -23,8 +23,7 @@ func (h *CallersHandler) Stat(path string) *VEntry {
 	if _, err := h.Graph.GetNode(parentDir); err != nil {
 		return nil
 	}
-	token := graph.DefTokenFor(h.Graph, parentDir)
-	callers, err := h.Graph.GetCallers(token)
+	callers, err := graph.CallersOf(h.Graph, parentDir, nil)
 	if err != nil || len(callers) == 0 {
 		return nil
 	}
@@ -65,8 +64,7 @@ func (h *CallersHandler) ListDir(path string) ([]DirExtra, bool) {
 	if _, err := h.Graph.GetNode(parentDir); err != nil {
 		return nil, false
 	}
-	token := graph.DefTokenFor(h.Graph, parentDir)
-	callers, err := h.Graph.GetCallers(token)
+	callers, err := graph.CallersOf(h.Graph, parentDir, nil)
 	if err != nil || len(callers) == 0 {
 		return nil, false
 	}
@@ -86,8 +84,7 @@ func (h *CallersHandler) DirExtras(parentPath string, _ *graph.Node) []DirExtra 
 	if parentPath == "/" {
 		return nil
 	}
-	token := graph.DefTokenFor(h.Graph, parentPath)
-	callers, err := h.Graph.GetCallers(token)
+	callers, err := graph.CallersOf(h.Graph, parentPath, nil)
 	if err != nil || len(callers) == 0 {
 		return nil
 	}

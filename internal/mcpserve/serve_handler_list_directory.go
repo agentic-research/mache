@@ -152,7 +152,7 @@ func virtualEntries(g graph.Graph, path string, listed []nodeEntry) []nodeEntry 
 	// leyline projection that segment is a tree-sitter kind
 	// (function_declaration_0), never the symbol (mache-cb4369).
 	if !isContainer && !seen["callers"] {
-		if callers, err := g.GetCallers(graph.DefTokenFor(g, path)); err == nil && len(callers) > 0 {
+		if callers, err := graph.CallersOf(g, path, nil); err == nil && len(callers) > 0 {
 			virtual = append(virtual, nodeEntry{
 				Name: "callers",
 				Path: path + "/callers",
