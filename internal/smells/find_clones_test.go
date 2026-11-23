@@ -448,3 +448,212 @@ func TestFindClones_CorpusHasEqualSizedSetsOfDifferentShape(t *testing.T) {
 	assert.Equal(t, nodes["other/gamma.go"], nodes["other/epsilon.go"],
 		"accumulate and drain must be the same size; adjust the corpus until they are")
 }
+
+// diffCorpus is cloneCorpus plus pairs planted to differ in exactly one way
+// the structure does not record.
+//
+//	capAbove / capBelow   one operator: > against <
+//	shout / hush          one called function: ToUpper against ToLower
+//	subLeft / subRight    the same two parameters, used in the other order
+//	across / upward       methods that call different methods on another value
+//	twiceWide / twiceTall methods that each call the method of their own name
+func diffCorpus() map[string]string {
+	files := map[string]string{}
+	for p, body := range cloneCorpus {
+		files[p] = body
+	}
+	files["pkg/ops.go"] = `package pkg
+
+import "strings"
+
+func capAbove(xs []int, limit int) int {
+	n := 0
+	for _, x := range xs {
+		if x > limit {
+			n++
+		}
+	}
+	return n
+}
+
+func capBelow(ys []int, bound int) int {
+	c := 0
+	for _, y := range ys {
+		if y < bound {
+			c++
+		}
+	}
+	return c
+}
+
+func shout(s string) string {
+	// Loud.
+	return strings.ToUpper(strings.TrimSpace(s))
+}
+
+func hush(t string) string {
+	return strings.ToLower(strings.TrimSpace(t)) /* quiet */
+}
+
+type span struct{ inner box }
+
+func (s span) across() int {
+	return s.inner.widthOf()
+}
+
+func (s span) upward() int {
+	return s.inner.heightOf()
+}
+
+func (b box) twiceWide() int {
+	return 2 * b.twiceWide()
+}
+
+func (b box) twiceTall() int {
+	return 2 * b.twiceTall()
+}
+
+func subLeft(x, y int) int {
+	return x - y
+}
+
+func subRight(p, q int) int {
+	return q - p
+}
+`
+	return files
+}
+
+// setDifferences is what find_clones says differs within one set, in a form
+// the planted truth can be written in: each difference as
+// "kind: name=text, name=text", names sorted.
+type setDifferences struct {
+	Identical bool
+	Renamed   bool
+	Diffs     []string
+}
+
+// differencesBySet calls find_clones on files and returns each set's
+// differences, keyed by the set's sorted function names joined with "+".
+func differencesBySet(t *testing.T, files map[string]string) map[string]setDifferences {
+	t.Helper()
+	g := parsedCorpus(t, files)
+	_, resp := findCloneSets(t, g, files, map[string]any{"min_nodes": 0, "include_tests": true})
+	out := map[string]setDifferences{}
+	for _, s := range resp.Sets {
+		require.Empty(t, s.DifferencesUnavailable)
+		names := make([]string, len(s.Members))
+		for i, m := range s.Members {
+			names[i] = funcNameAt(t, files[m.SourceID], m.Line)
+		}
+		d := setDifferences{Identical: s.IdenticalModuloRenames, Renamed: s.RenamedPositions > 0}
+		for _, diff := range s.Differences {
+			require.Len(t, diff.Values, len(s.Members))
+			var parts []string
+			for i, v := range diff.Values {
+				assert.Equal(t, s.Members[i].SourceID, v.SourceID)
+				assert.Contains(t, strings.Split(files[v.SourceID], "\n")[v.Line-1], v.Text, "the line holds the text")
+				parts = append(parts, names[i]+"="+v.Text)
+			}
+			slices.Sort(parts)
+			d.Diffs = append(d.Diffs, diff.Kind+": "+strings.Join(parts, ", "))
+		}
+		sorted := slices.Clone(names)
+		slices.Sort(sorted)
+		out[strings.Join(sorted, "+")] = d
+	}
+	return out
+}
+
+// The claim, stated so it can be refuted: for every set, find_clones lists
+// exactly the places where the copies do different things, and nothing else.
+// Each expectation below is planted in the corpus source. Names, constants
+// and operators are what the clone structure does not record, so they are
+// what a merge can silently change.
+func TestFindClones_DifferencesAreExactlyThePlantedOnes(t *testing.T) {
+	want := map[string]setDifferences{
+		// Three copies; only countBig's threshold differs.
+		"SumPositive+TotalAboveZero+countBig": {Renamed: true, Diffs: []string{
+			"literal: SumPositive=0, TotalAboveZero=0, countBig=100",
+		}},
+		"ParseFlag+ParseToggle": {Renamed: true, Diffs: []string{
+			"literal: ParseFlag=on, ParseToggle=enabled",
+			"literal: ParseFlag=yes, ParseToggle=true",
+			"literal: ParseFlag=off, ParseToggle=disabled",
+			"literal: ParseFlag=no, ParseToggle=false",
+			"literal: ParseFlag=bad flag, ParseToggle=bad toggle",
+		}},
+		// The same code under other names: nothing to parameterize.
+		"drainFirst+drainSecond": {Identical: true, Renamed: true},
+		"mustBuild+mustMake": {Renamed: true, Diffs: []string{
+			"literal: mustBuild=no parts, mustMake=no pieces",
+		}},
+		// A field is not a local: the two accessors read different data.
+		"heightOf+widthOf": {Renamed: true, Diffs: []string{
+			"reference: heightOf=h, widthOf=w",
+		}},
+		// One character apart, and opposite in meaning. The parse stores no
+		// node for an operator, so only the text between nodes shows it.
+		"capAbove+capBelow": {Renamed: true, Diffs: []string{
+			"operator: capAbove=>, capBelow=<",
+		}},
+		// Comments differ between these two and are not a difference.
+		"hush+shout": {Renamed: true, Diffs: []string{
+			"reference: hush=ToLower, shout=ToUpper",
+		}},
+		// Each forwards to a different method of another value. That the
+		// two methods are themselves differently named does not make the
+		// call a renaming.
+		"across+upward": {Renamed: true, Diffs: []string{
+			"reference: across=widthOf, upward=heightOf",
+		}},
+		// A selector is never a local, so a method calling the method of
+		// its own name is reported too: the tool cannot tell recursion from
+		// forwarding to another value's method, and says so by listing it.
+		"twiceTall+twiceWide": {Renamed: true, Diffs: []string{
+			"reference: twiceTall=twiceTall, twiceWide=twiceWide",
+		}},
+		// Both rename (x, y) to (p, q), and then use them the other way
+		// round: a consistent renaming cannot explain either position.
+		"subLeft+subRight": {Renamed: true, Diffs: []string{
+			"reference: subLeft=x, subRight=q",
+			"reference: subLeft=y, subRight=p",
+		}},
+	}
+	assert.Equal(t, want, differencesBySet(t, diffCorpus()))
+}
+
+func TestBetweenNodes(t *testing.T) {
+	for in, want := range map[string]string{
+		" > ":                         ">",
+		"\n\t\tif ":                   "if",
+		") { // why\n\treturn ":       ") { return",
+		" /* a */ += /* b */ ":        "+=",
+		" // only a comment":          "",
+		"":                            "",
+		" /* never closed":            "",
+		"}\n\n// doc\n// more\nfunc ": "} func",
+	} {
+		assert.Equal(t, want, betweenNodes([]byte(in)), "%q", in)
+	}
+}
+
+// A local the copy declares under two names, or two locals it gives one
+// name, is no renaming: positions that use it must be reported, not passed.
+func TestLocalRenames_RefusesAnInconsistentMapping(t *testing.T) {
+	tok := func(names ...string) []cloneToken {
+		out := make([]cloneToken, len(names))
+		for i, n := range names {
+			out[i] = cloneToken{kind: "identifier", text: n, declares: true}
+		}
+		return out
+	}
+	consistent := localRenames(cloneCopy{tokens: tok("a", "b", "a")}, cloneCopy{tokens: tok("x", "y", "x")})
+	assert.Equal(t, map[string]string{"a": "x", "b": "y"}, consistent)
+
+	split := localRenames(cloneCopy{tokens: tok("a", "b", "a")}, cloneCopy{tokens: tok("x", "y", "z")})
+	assert.Equal(t, map[string]string{"b": "y"}, split, "a is declared as both x and z")
+
+	merged := localRenames(cloneCopy{tokens: tok("a", "b")}, cloneCopy{tokens: tok("x", "x")})
+	assert.Empty(t, merged, "a and b both become x")
+}

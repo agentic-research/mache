@@ -8,6 +8,17 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`find_clones` says what differs between the copies** (`mache-202b81`).
+  A clone set is functions with the same structure, and structure does not
+  record names, constants or operators: `if x > 0` and `if x < 0` are the same
+  shape. Each set now carries `identical_modulo_renames` (the copies are the
+  same code apart from what each calls its own parameters and locals) and
+  `differences`, which lists every other place they disagree as a `literal`,
+  an `operator`, or a `reference` (a called function, field or type), with
+  each copy's text and line. Comments are not differences. On mache itself, 4
+  of 33 production sets are identical apart from renames; the rest name what a
+  shared helper would have to take as a parameter.
+
 - **`find_clones`: which functions are copies of each other** (`mache-01833e`).
   A new MCP tool that returns clone sets: functions with the same structure,
   whatever their names and constants, ranked by how much code one shared
