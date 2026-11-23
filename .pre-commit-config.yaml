@@ -23,7 +23,11 @@ repos:
         # rosary at SHA X" provenance and could change test results
         # for the doc-drift rules that read these files. Same rationale
         # as .beads/ — vendored content owned by another repo.
-        exclude: '^(\.beads/|testdata/snapshots/|internal/testutil/testdata/)'
+        # Anything under a testdata/ directory is a fixture or a generated
+        # golden file (internal/ingest/testdata/engine_direct_matrix.md is
+        # compared byte for byte by its test): reformatting it breaks the
+        # comparison. Regenerate it instead.
+        exclude: '^(\.beads/|(.*/)?testdata/)'
 
   # Basic file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
