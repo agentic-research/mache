@@ -280,7 +280,7 @@ func printable(v any) any {
 // a template that calls it, so it is a well-formed node of the parse tree.
 var printableCmd = func() *parse.CommandNode {
 	t := template.Must(template.New("").Funcs(template.FuncMap{printableFunc: printable}).Parse("{{" + printableFunc + "}}"))
-	return t.Tree.Root.Nodes[0].(*parse.ActionNode).Pipe.Cmds[0]
+	return t.Root.Nodes[0].(*parse.ActionNode).Pipe.Cmds[0]
 }()
 
 // parseTemplate parses tmpl with funcs and makes every printing action print
@@ -292,7 +292,7 @@ func parseTemplate(tmpl string, funcs template.FuncMap) (*template.Template, err
 	}
 	for _, defined := range t.Templates() {
 		if defined.Tree != nil {
-			printMissingAsEmpty(defined.Tree.Root)
+			printMissingAsEmpty(defined.Root)
 		}
 	}
 	return t, nil
