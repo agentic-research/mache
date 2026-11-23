@@ -2516,7 +2516,7 @@
     {
       "rule_id": "long_function",
       "source_id": "graph/sqlite_graph_scan.go",
-      "node_hash": "97c487d5de1b078ba0be57a75516c42dfc6cd1415dca27c6f5c23074a58eb759",
+      "node_hash": "58a2b9db56e385a83e5e099fec01f464f1597f7047c0ce27da4a8fab9088c038",
       "count": 1
     },
     {
