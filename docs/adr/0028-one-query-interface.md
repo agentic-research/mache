@@ -194,11 +194,27 @@ A person serving a graph should not have to know that mache has two stores. Toda
 `mache serve data.json` ingests into memory on every start (four minutes for a 164,464-record
 graph), while `mache --out` then `mache serve out.db` opens in five seconds.
 
-`serve` on a data source builds a database once, into the parse cache it already keeps for
-source trees, and serves that. The in-memory store narrows to what it is good for: tests,
-and inputs small enough that building a file is not worth it. It is then held to the
+`serve` on a data source uses a built projection when one exists for its inputs, and
+builds one when none does. The in-memory store narrows to what it is good for: tests, and
+inputs small enough that building anything is not worth it. It is then held to the
 conformance suite for the operations it keeps, not for all of them, which is most of the
 parity work this ADR would otherwise have to do twice.
+
+**The cache is ley-line's, not mache's.** Ley-line-open already owns the cache substrate
+(blob store, content-defined chunks, sheaf, daemon protocol), and its ADR-0021 defines the
+manifest every consumer should use: *(input hash + processor version + schema version) →
+content-addressed chunk*. A data projection is exactly that shape: the input is the data
+file's content, the processor is the mache version, the schema is the topology's hash.
+Mache states those three and asks; it does not keep a second cache with its own keys and
+its own invalidation. `$MACHE_HOME/parse` and `mache cache` are the parallel substrate
+bead `mache-e64f36` already says to retire, and this decision must not add a third.
+
+**What is built should be small.** The engine path materialises every node as a row: two
+minutes and 2.4 GB for the 164,464-record graph. The direct path already serves records
+lazily from one row each, with no ingestion, but ignores `refs`, so it cannot answer
+`find_callers`. A direct path with a refs index (one row per record, one per reference,
+nodes projected on demand) is the candidate for what gets built and cached. It is
+unmeasured; step 1 of the migration includes measuring it against the engine path.
 
 ### One profile, not two
 
@@ -273,7 +289,9 @@ Each step is independently shippable and leaves `main` working.
 
 - **Where the size line sits** for "small enough to stay in memory", and whether it is a
   fixed number of records or a setting.
-- **Cache invalidation for data sources.** Source trees are keyed by file content already.
-  A JSON or SQLite source needs the same: content hash of the data plus the schema.
-- **ADR-0026.** If the arena becomes the substrate, the cached database in decision 7 is an
-  arena. That should be the same decision, not a second cache.
+- **Which ley-line release carries the manifest mache needs.** LLO ADR-0021 is Proposed in
+  the checkout this was written against (2026-08-28, older than the pinned v0.30.0). What
+  the pin actually ships (`leyline load`, `cdc`, `rebuild`, parserId-keyed build reuse) has
+  to be read from the pinned binary and its docs before decision 7 is scheduled.
+- **Whether ley-line can hold a data projection at all today**, or only a parsed source
+  tree. `leyline parse` targets source code; nothing found yet ingests JSON records.
