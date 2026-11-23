@@ -30,11 +30,39 @@ type scanResult struct {
 	// defs and refs are the tokens the record's nodes define and reference.
 	defs []tokenAt
 	refs []tokenAt
+	// claimed holds every directory with files already bound to a record in
+	// this scan. Unlike reset's slices it lives across records: it is how a
+	// second record rendering the same directory is told apart.
+	claimed map[string]bool
 }
 
 // reset empties the result for the next record, keeping its buffers.
 func (r *scanResult) reset() {
 	r.entries, r.leafDirs, r.defs, r.refs = r.entries[:0], r.leafDirs[:0], r.defs[:0], r.refs[:0]
+}
+
+// claim binds a directory with files to the record being scanned and
+// returns its path: as rendered when no earlier record holds it, else with
+// the first free `.2`, `.3`, ... suffix. That is the engine's rule for a
+// construct whose name is taken (claimConstructID, with no source file to
+// distinguish records), applied in the same record order, so both paths give
+// a record the same ID. The direct path used to bind the second record to
+// the first one's directory, so one of them was never served
+// (mache-299113). Containers (no files) still merge: every record under
+// `{{.area}}` shares the area's directory, on both paths.
+func (r *scanResult) claim(path string) string {
+	if !r.claimed[path] {
+		r.claimed[path] = true
+		return path
+	}
+	for n := 2; ; n++ {
+		numbered := fmt.Sprintf("%s.%d", path, n)
+		if !r.claimed[numbered] {
+			r.claimed[numbered] = true
+			log.Printf("[WARN] duplicate name %q: a second record renders the same directory — serving it as %q", path, numbered)
+			return numbered
+		}
+	}
 }
 
 // tokenAt is a token and the directory node it belongs to.
@@ -295,7 +323,7 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 	fields := make([]string, len(fieldPaths))
 
 	// Reusable result buffer for collectPathEntries
-	var result scanResult
+	result := scanResult{claimed: map[string]bool{}}
 
 	count := 0
 	scanErrs := 0
@@ -451,6 +479,9 @@ func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values, refValues m
 		}
 
 		childPath := parentPath + "/" + SegmentEscape(name)
+		if len(child.files) > 0 {
+			childPath = result.claim(childPath)
+		}
 		result.entries = append(result.entries, pathEntry{parent: parentPath, child: childPath})
 
 		// Recurse into deeper directory levels
