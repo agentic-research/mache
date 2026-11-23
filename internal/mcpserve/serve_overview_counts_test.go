@@ -109,26 +109,35 @@ func TestGetOverview_TotalsCountTheWholeGraph(t *testing.T) {
 	}
 }
 
-// callCounter counts the calls a graph is asked for, by kind.
+// callCounter tallies the calls a graph is asked for, by method name.
 type callCounter struct {
 	graph.Graph
-	getNode, listChildren, listStats int
+	calls map[string]int
 }
 
+func newCallCounter(g graph.Graph) *callCounter {
+	return &callCounter{Graph: g, calls: map[string]int{}}
+}
+
+// listings is the directory listings made, of either kind.
+func (c *callCounter) listings() int { return c.calls["ListChildren"] + c.calls["ListChildStats"] }
+
 func (c *callCounter) GetNode(id string) (*graph.Node, error) {
-	c.getNode++
+	defer c.tally("GetNode")
 	return c.Graph.GetNode(id)
 }
 
 func (c *callCounter) ListChildren(id string) ([]string, error) {
-	c.listChildren++
+	defer c.tally("ListChildren")
 	return c.Graph.ListChildren(id)
 }
 
 func (c *callCounter) ListChildStats(id string) ([]graph.NodeStat, error) {
-	c.listStats++
+	defer c.tally("ListChildStats")
 	return c.Graph.ListChildStats(id)
 }
+
+func (c *callCounter) tally(method string) { c.calls[method]++ }
 
 // NodeCounts forwards to the wrapped graph when it can count itself.
 func (c *callCounter) NodeCounts() (dirs, files int, err error) {
@@ -147,19 +156,19 @@ func TestWalkCounts_StopsAtItsListingCapAndSaysSo(t *testing.T) {
 	roots, err := store.ListChildren("")
 	require.NoError(t, err)
 
-	counted := &callCounter{Graph: store}
+	counted := newCallCounter(store)
 	dirs, files, truncated := walkCounts(counted, roots, 3)
 	assert.True(t, truncated)
-	assert.Equal(t, 3, counted.listStats+counted.listChildren, "exactly the cap in directory listings")
+	assert.Equal(t, 3, counted.listings(), "exactly the cap in directory listings")
 	assert.Less(t, dirs+files, deepDirs+deepFiles)
 	assert.Positive(t, dirs)
 
-	counted = &callCounter{Graph: store}
+	counted = newCallCounter(store)
 	dirs, files, truncated = walkCounts(counted, roots, deepDirs)
 	assert.False(t, truncated, "a walk that lists exactly every directory is complete")
 	assert.Equal(t, deepDirs, dirs)
 	assert.Equal(t, deepFiles, files)
-	assert.LessOrEqual(t, counted.getNode, len(roots), "files are counted from their parent's listing, not looked up")
+	assert.LessOrEqual(t, counted.calls["GetNode"], len(roots), "files are counted from their parent's listing, not looked up")
 }
 
 // noStats is a graph whose ListChildStats answers nothing, as SQLiteWriter's
@@ -189,7 +198,7 @@ func TestGetOverview_MountTotalsAreTheSumOfTheMountsWithoutAWalk(t *testing.T) {
 	build := func() *callCounter {
 		store := graph.NewMemoryStore()
 		require.NoError(t, ingest.NewEngine(schema, store).Ingest(dataPath))
-		return &callCounter{Graph: store}
+		return newCallCounter(store)
 	}
 	a, b := build(), build()
 	composite := graph.NewCompositeGraph()
@@ -199,8 +208,8 @@ func TestGetOverview_MountTotalsAreTheSumOfTheMountsWithoutAWalk(t *testing.T) {
 	got := overviewTotalsOf(t, servedGraph(composite))
 	assert.Equal(t, overviewTotals{TotalDirs: 2*deepDirs + 2, TotalFiles: 2 * deepFiles}, got)
 	for name, m := range map[string]*callCounter{"alpha": a, "beta": b} {
-		assert.Zero(t, m.listStats, "%s was walked", name)
-		assert.LessOrEqual(t, m.getNode+m.listChildren, 8, "%s: more than the root listing and the top-level summary", name)
+		assert.Zero(t, m.calls["ListChildStats"], "%s was walked", name)
+		assert.LessOrEqual(t, m.calls["GetNode"]+m.calls["ListChildren"], 8, "%s: more than the root listing and the top-level summary", name)
 	}
 }
 
