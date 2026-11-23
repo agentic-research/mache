@@ -19,29 +19,29 @@ func TestCheckLeylineVersionCompat(t *testing.T) {
 	}{
 		{
 			name: "compatible — matching wire + client >= compat_min",
-			resp: map[string]any{"wire_format_major": float64(2), "compat_min": "0.4.1", "schema_version": "0.30.0"},
+			resp: map[string]any{"wire_format_major": float64(3), "compat_min": "0.4.1", "schema_version": "0.31.0"},
 		},
 		{
-			// leyline v0.26.0 moved the wire to major 2 (tree_root became
-			// store_root, mache-107423): a v1 daemon speaks shapes this build
-			// no longer decodes.
+			// leyline v0.31.0 moved the wire to major 3 (`query` rows became
+			// lists of cells, mache-1f85ec): a v2 daemon sends rows this
+			// build refuses to read.
 			name:    "an older wire major refuses",
-			resp:    map[string]any{"wire_format_major": float64(1), "compat_min": "0.4.1", "schema_version": "0.25.0"},
-			wantErr: "wire-format is v1 but this mache build speaks v2",
+			resp:    map[string]any{"wire_format_major": float64(2), "compat_min": "0.4.1", "schema_version": "0.30.0"},
+			wantErr: "wire-format is v2 but this mache build speaks v3",
 		},
 		{
 			name:    "a newer wire major refuses (M3)",
-			resp:    map[string]any{"wire_format_major": float64(3), "compat_min": "0.4.1", "schema_version": "0.31.0"},
-			wantErr: "wire-format is v3 but this mache build speaks v2",
+			resp:    map[string]any{"wire_format_major": float64(4), "compat_min": "0.4.1", "schema_version": "0.99.0"},
+			wantErr: "wire-format is v4 but this mache build speaks v3",
 		},
 		{
 			name:    "wire major as JSON string still refuses (capnp-json int-as-string)",
-			resp:    map[string]any{"wire_format_major": "3"},
-			wantErr: "wire-format is v3",
+			resp:    map[string]any{"wire_format_major": "4"},
+			wantErr: "wire-format is v4",
 		},
 		{
 			name:    "client older than compat_min refuses",
-			resp:    map[string]any{"wire_format_major": float64(2), "compat_min": "0.9.0"},
+			resp:    map[string]any{"wire_format_major": float64(3), "compat_min": "0.9.0"},
 			wantErr: "requires >= 0.9.0",
 		},
 		{
@@ -50,7 +50,7 @@ func TestCheckLeylineVersionCompat(t *testing.T) {
 		},
 		{
 			name: "matching wire, no compat_min — ok",
-			resp: map[string]any{"wire_format_major": float64(2)},
+			resp: map[string]any{"wire_format_major": float64(3)},
 		},
 	}
 	for _, c := range cases {
