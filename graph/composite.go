@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"io/fs"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -102,6 +103,15 @@ func (c *CompositeGraph) MountPrefixOf(id string) string {
 	defer c.mu.RUnlock()
 	prefix, _, _ := c.resolve(id)
 	return prefix
+}
+
+var _ MountLister = (*CompositeGraph)(nil)
+
+// Mounts implements [MountLister]: a copy of the mount table.
+func (c *CompositeGraph) Mounts() map[string]Graph {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return maps.Clone(c.mounts)
 }
 
 // LookupDef federates LookupDef across mounts: returns all dir IDs

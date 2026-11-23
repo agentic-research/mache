@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -121,20 +122,34 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
-// maxOverviewWalk bounds the walk overviewCounts falls back to, so a graph
-// that cannot count itself costs get_overview a bounded amount of work.
-const maxOverviewWalk = 100_000
+// maxOverviewListings bounds the walk overviewCounts falls back to: the
+// number of directories it lists. A directory listing is the unit of cost on
+// every backend (one query, or one request to the daemon), and files are
+// counted from their parent's listing without being visited, so this bounds
+// what a graph that cannot count itself costs get_overview. When the cap was
+// 100,000 nodes with a lookup per node, --mount mode took 14s per call on
+// mache's own tree (mache-553d34).
+const maxOverviewListings = 2000
 
-// overviewCounts is get_overview's directory and file totals. A projection
-// with `_tree` counts its whole source tree; there a source file is a
-// directory of syntax nodes, so counting the graph's file nodes reported 0
-// files (mache-7fed6a). Any other graph counts its own nodes, all of them:
-// asked of the graph when it can count, else by walking it. The walk used to
-// stop two levels down and report that as the total, which for a deep data
-// projection was 316 directories and 0 files out of 164k and 658k (#820). A
-// walk that hits maxOverviewWalk reports truncated, so a partial count is
-// never presented as a total.
+// overviewCounts is get_overview's directory and file totals. In order:
+//
+//   - A composite is the sum of its mounts, each counted as below, plus one
+//     directory per mount.
+//   - A projection with `_tree` counts its whole source tree; there a source
+//     file is a directory of syntax nodes, so counting the graph's file nodes
+//     reported 0 files (mache-7fed6a).
+//   - A graph that can count its own nodes is asked.
+//   - Any other graph is walked, breadth-first, for at most
+//     maxOverviewListings directory listings. A walk that stops there reports
+//     truncated, so a partial count is never presented as a total. The walk
+//     used to stop two levels down and report that as the total: 316
+//     directories and 0 files out of 164k and 658k (#820).
 func overviewCounts(g graph.Graph, children []string) (dirs, files int, truncated bool) {
+	if ml, ok := g.(graph.MountLister); ok {
+		if mounts := ml.Mounts(); len(mounts) > 0 {
+			return mountCounts(mounts)
+		}
+	}
 	if treeFiles, treeDirs, ok := treeSummary(g); ok {
 		return treeDirs, len(treeFiles), false
 	}
@@ -147,32 +162,75 @@ func overviewCounts(g graph.Graph, children []string) (dirs, files int, truncate
 			log.Printf("get_overview: count nodes: %v", err)
 		}
 	}
-	return walkCounts(g, children, maxOverviewWalk)
+	return walkCounts(g, children, maxOverviewListings)
 }
 
-// walkCounts counts the directories and files under children breadth-first,
-// visiting at most limit nodes; truncated says it stopped there.
-func walkCounts(g graph.Graph, children []string, limit int) (dirs, files int, truncated bool) {
-	queue := slices.Clone(children)
-	for visited := 0; len(queue) > 0; visited++ {
-		if visited == limit {
+// mountCounts is the totals of a composite: each mount's own, plus the
+// directory each mount appears as.
+func mountCounts(mounts map[string]graph.Graph) (dirs, files int, truncated bool) {
+	for _, name := range slices.Sorted(maps.Keys(mounts)) {
+		m := mounts[name]
+		roots, err := m.ListChildren("")
+		if err != nil {
+			log.Printf("get_overview: list mount %s: %v", name, err)
+			truncated = true
+			continue
+		}
+		d, f, t := overviewCounts(m, roots)
+		dirs, files, truncated = dirs+d+1, files+f, truncated || t
+	}
+	return dirs, files, truncated
+}
+
+// walkCounts counts the directories and files under roots breadth-first,
+// listing at most maxListings directories; truncated says directories were
+// left unlisted. Each directory costs one ListChildStats, which says which
+// children are directories; a graph that does not answer it costs one
+// ListChildren and a GetNode per child.
+func walkCounts(g graph.Graph, roots []string, maxListings int) (dirs, files int, truncated bool) {
+	queue := make([]string, 0, len(roots))
+	for _, id := range roots {
+		node, _ := g.GetNode(id)
+		switch {
+		case node == nil:
+		case node.Mode.IsDir():
+			dirs++
+			queue = append(queue, id)
+		default:
+			files++
+		}
+	}
+	for listed := 0; len(queue) > 0; listed++ {
+		if listed == maxListings {
 			return dirs, files, true
 		}
 		id := queue[0]
 		queue = queue[1:]
-		node, _ := g.GetNode(id)
-		if node == nil {
-			continue
+		for _, child := range childKinds(g, id) {
+			if child.IsDir {
+				dirs++
+				queue = append(queue, child.ID)
+			} else {
+				files++
+			}
 		}
-		if !node.Mode.IsDir() {
-			files++
-			continue
-		}
-		dirs++
-		sub, _ := g.ListChildren(id)
-		queue = append(queue, sub...)
 	}
 	return dirs, files, false
+}
+
+// childKinds is the children of a directory with whether each is one.
+func childKinds(g graph.Graph, id string) []graph.NodeStat {
+	if stats, err := g.ListChildStats(id); err == nil && len(stats) > 0 {
+		return stats
+	}
+	ids, _ := g.ListChildren(id)
+	stats := make([]graph.NodeStat, 0, len(ids))
+	for _, child := range ids {
+		if node, _ := g.GetNode(child); node != nil {
+			stats = append(stats, graph.NodeStat{ID: child, IsDir: node.Mode.IsDir()})
+		}
+	}
+	return stats
 }
 
 // refTokenCount is how many tokens the graph's references name: counted by the
