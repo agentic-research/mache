@@ -34,6 +34,7 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/projtest"
+	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -335,19 +336,27 @@ var claims = map[string]func(t *testing.T, fx fixtures){
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no such table: results")
 	},
-	"direct path ignores selector": func(t *testing.T, fx fixtures) {
-		topo := topology(t, `{"version":"v1","nodes":[{"name":"vulns","selector":"$.nothing[*]","children":[{"name":"{{.item.cveID}}","selector":"$.nothing[*]","files":[{"name":"vendor","content_template":"{{.item.vendorProject}}"}]}]}]}`)
+	"direct path refuses a selector inside a record": func(t *testing.T, fx fixtures) {
+		topo := topology(t, `{"version":"v1","nodes":[{"name":"vulns","children":[{"name":"{{.item.cveID}}","selector":"$.nothing[*]","files":[{"name":"vendor","content_template":"{{.item.vendorProject}}"}]}]}]}`)
+		_, err := graph.OpenSQLiteGraph(fx.dbPath, topo, machetmpl.Render)
+		require.ErrorIs(t, err, graph.ErrDirectSchemaUnsupported)
+		assert.Contains(t, err.Error(), `"$.nothing[*]"`, "names the selector")
+		assert.Contains(t, err.Error(), "--out", "names the engine path")
+	},
+	"direct path ignores a root's selector": func(t *testing.T, fx fixtures) {
+		topo := topology(t, `{"version":"v1","nodes":[{"name":"vulns","selector":"$.nothing[*]","children":[{"name":"{{.item.cveID}}","selector":"$[*]","files":[{"name":"vendor","content_template":"{{.item.vendorProject}}"}]}]}]}`)
 		_, leaves, _ := projtest.Walk(t, projtest.VenturiDirect(t, topo, fx.dbPath), nil)
 		assert.Equal(t, []string{"vulns/CVE-2021-44228/vendor", "vulns/CVE-2023-4966/vendor"}, leaves)
 	},
-	"direct path does not render leaf names": func(t *testing.T, fx fixtures) {
+	"direct path renders leaf names": func(t *testing.T, fx fixtures) {
 		topo := topology(t, `{"version":"v1","nodes":[{"name":"vulns","children":[{"name":"{{.item.cveID}}","files":[{"name":"{{.item.product}}","content_template":"{{.item.vendorProject}}"}]}]}]}`)
 		g := projtest.VenturiDirect(t, topo, fx.dbPath)
 		children, err := g.ListChildren("vulns/CVE-2021-44228")
 		require.NoError(t, err)
-		assert.Equal(t, []string{"vulns/CVE-2021-44228/{{.item.product}}"}, children)
-		_, err = g.GetNode("vulns/CVE-2021-44228/Log4j")
-		assert.ErrorIs(t, err, graph.ErrNotFound)
+		assert.Equal(t, []string{"vulns/CVE-2021-44228/Log4j"}, children)
+		node, err := g.GetNode("vulns/CVE-2021-44228/Log4j")
+		require.NoError(t, err)
+		assert.Equal(t, "Apache", projtest.Read(t, g, node))
 	},
 	"direct path does not inject _parent": func(t *testing.T, fx fixtures) {
 		topo := topology(t, `{"version":"v1","nodes":[{"name":"vulns","children":[{"name":"{{.item.cveID}}","children":[{"name":"{{._parent.item.cveID}}","files":[{"name":"vendor","content_template":"{{.item.vendorProject}}"}]}]}]}]}`)

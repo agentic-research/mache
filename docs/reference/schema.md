@@ -177,9 +177,9 @@ The directory name. A Go `text/template` rendered against the match (see
 
 - data (engine), source: a root node's name is rendered too, but a root is
   matched once, so a static name is the norm.
-- data (direct): roots must be static. A root with `{{` in its name is not
-  listed and cannot be looked up (`compileLevels` marks only static names as
-  roots).
+- data (direct): roots must be static. A schema with a templated root name
+  is refused when the db is opened, pointing to the engine path; it used to
+  be accepted and the root never listed.
 - data (engine) over a `.db`: the root name is used verbatim, unrendered.
 
 A rendered name that contains `/` or `%` is percent-encoded in the node ID
@@ -195,8 +195,12 @@ syntax depends on the source kind; see [Selectors](#selectors).
   JSONPath to ojg and matches nothing, so the node and everything under it
   is silently absent.
 - source: an empty selector is rejected (`parse selector: empty selector`).
-- data (direct): **ignored**. Every record produces one path down every chain
-  of child nodes; the selector key is accepted and never read.
+- data (direct): a root's selector is ignored. Below the root, a selector
+  must mean "this record" (empty, `$` or `$[*]`): every row is one record and
+  the scan evaluates no JSONPath. Any other selector (`$.tools[*]`, a filter)
+  is refused when the db is opened, naming the node and pointing to the
+  engine path, which evaluates it. It used to be accepted and ignored, which
+  served a partial tree.
 - data (engine) over a `.db`: the root node's selector is ignored (the root
   is created unconditionally); each child selector runs against a one-element
   array holding the record, so `$[*]` yields the record.
@@ -306,10 +310,11 @@ A file.
 
 ### `name`
 
-The file name. A template on data (engine) and source. On data (direct) it is
-used verbatim: the scan writes `dir + "/" + name` without rendering, and path
-lookup matches only names with no `{{`, so a templated leaf name is not
-reachable there. Tracked as `mache-56ff85`.
+The file name. A template on every path. On data (direct) it is rendered per
+record against the fields it names, as directory names are, and found by the
+path it rendered to. A file name that renders empty is `_unnamed`, as a
+directory's is. (Data (direct) used to write a templated name verbatim, which
+no lookup reached: `mache-56ff85`.)
 
 Two names are special on the source path: `source` is kept even when it
 renders empty and is the leaf that carries the write-back origin; `doc` is
@@ -784,8 +789,9 @@ Each of these is verified against the current tree and tracked.
 - `{{.index}}` in the presets is set by no walker (`mache-fa8b02`).
 - `version` is not checked (`mache-56b800`); `attributes.mode` is not applied
   (`mache-5689b3`); `table` is ignored by the engine's `.db` path
-  (`mache-56d7dc`); the direct path ignores `selector`, `refs` and templated
-  leaf names and does not inject `_parent` (`mache-56ff85`).
+  (`mache-56d7dc`); the direct path refuses a selector inside a record and a
+  templated root, and does not inject `_parent`, so a name made of it renders
+  empty (`mache-b33274`).
 - A schema with any `(`-selector is a source schema. Over a directory, its
   `.json` and `.db` files are copied raw under `_project_files/`, not
   parsed; JSONPath nodes in the same file never run.

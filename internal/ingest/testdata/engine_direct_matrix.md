@@ -6,7 +6,9 @@ Do not edit by hand.
 Each case projects one planted schema and set of records two ways: the
 **engine** path (`mache --out`, every node a row) and the **direct** path (one
 row per record, nodes projected on demand). A cell says whether the two
-answer the same, and if not, the first difference. This is ADR-0028's first
+answer the same, and if not, the first difference. "direct refuses" means the
+direct path will not open that schema and says to use the engine path, which
+is an answer, not a disagreement. This is ADR-0028's first
 step for data sources: the list of disagreements, before deciding which
 answer is specified. See `engine_direct_matrix_test.go` for each case.
 
@@ -15,9 +17,10 @@ answer is specified. See `engine_direct_matrix_test.go` for each case.
 | baseline | one record per array element, a list-valued ref, distinct names | agree | agree | agree | agree |
 | same-name records | two records render the same directory (mache-299113) | agree | agree | agree | agree |
 | missing name field | a record lacks the field its directory name is made of | agree | agree | agree | agree |
-| nested selector | a child selects an array inside each record ($.tools[*]) | **differ** (10): `servers/notes/_unnamed` only on direct (node); … | **differ** (5): `servers/notes/_unnamed/desc` only on direct (""); … | **differ** (3): `servers/notes/read` only on engine ([read]); … | agree |
-| templated root | the root node's name is a template | **differ** (4): `x` only on engine (node); … | **differ** (2): `x/doc` only on engine ("dx"); … | agree | agree |
-| templated file name | a file's name is a template | **differ** (2): `mods/a/One/note.txt` only on engine (node); … | **differ**: `mods/a/One/note.txt` only on engine ("d1") | agree | agree |
+| nested selector | a child selects an array inside each record ($.tools[*]) | direct refuses: selector inside a record | direct refuses: selector inside a record | direct refuses: selector inside a record | direct refuses: selector inside a record |
+| templated root | the root node's name is a template | direct refuses: templated root | direct refuses: templated root | direct refuses: templated root | direct refuses: templated root |
+| templated file name | a file's name is a template | agree | agree | agree | agree |
+| file name from a missing field | a file is named by a field one record lacks, so its name renders empty | agree | agree | agree | agree |
 | empty content | a file whose template renders empty for one record | agree | agree | agree | agree |
 | absent content field | a file's template names a field one record does not have | agree | agree | agree | agree |
 | dotted names | a name with dots is also defined under its last segment | agree | agree | agree | agree |

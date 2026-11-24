@@ -119,6 +119,13 @@ var matrixCases = []matrixCase{
 		records: `[{"area":"a","name":"One","kind":"note","doc":"d1","uses":[]}]`,
 	},
 	{
+		name:   "file name from a missing field",
+		about:  "a file is named by a field one record lacks, so its name renders empty",
+		schema: moduleSchema("{{.name}}", leaf("{{.kind}}", "{{.doc}}")),
+		records: `[{"area":"a","name":"Typed","kind":"note","doc":"d","uses":[]},
+		           {"area":"a","name":"Untyped","doc":"d","uses":[]}]`,
+	},
+	{
 		name:   "empty content",
 		about:  "a file whose template renders empty for one record",
 		schema: moduleSchema("{{.name}}", leaf("doc", "{{.doc}}"), leaf("extra", "{{.extra}}")),
@@ -324,6 +331,14 @@ func matrixRow(t *testing.T, c matrixCase) []string {
 	require.NoError(t, json.Unmarshal([]byte(c.records), &recs), c.name)
 	roots := rootsOf(c, recs)
 
+	// A schema the direct path cannot honour is refused at open. That is an
+	// answer, not a difference: the row says which feature and that the
+	// engine path is the way to serve it.
+	if _, err := openDirect(t, c.schema, p); err != nil {
+		require.ErrorIs(t, err, graph.ErrDirectSchemaUnsupported, c.name)
+		reason := "direct refuses: " + refusalFeature(err)
+		return []string{c.name, reason, reason, reason, reason}
+	}
 	engine := observe(t, engineGraph(t, c.schema, p), roots, c.tokens)
 	direct := observe(t, directGraph(t, c.schema, p), roots, c.tokens)
 	tokens := tokensOf(c, engine, direct)
@@ -340,6 +355,19 @@ func matrixRow(t *testing.T, c matrixCase) []string {
 	}
 }
 
+// refusalFeature is what a refusal names, without the paths and the advice,
+// so the committed table reads the same on every machine.
+func refusalFeature(err error) string {
+	switch msg := err.Error(); {
+	case strings.Contains(msg, "templated name"):
+		return "templated root"
+	case strings.Contains(msg, "inside a record"):
+		return "selector inside a record"
+	default:
+		return "unsupported schema"
+	}
+}
+
 func renderMatrix(rows [][]string) string {
 	var b strings.Builder
 	b.WriteString(`# Engine vs direct: what each data path answers
@@ -350,7 +378,9 @@ Do not edit by hand.
 Each case projects one planted schema and set of records two ways: the
 **engine** path (` + "`mache --out`" + `, every node a row) and the **direct** path (one
 row per record, nodes projected on demand). A cell says whether the two
-answer the same, and if not, the first difference. This is ADR-0028's first
+answer the same, and if not, the first difference. "direct refuses" means the
+direct path will not open that schema and says to use the engine path, which
+is an answer, not a disagreement. This is ADR-0028's first
 step for data sources: the list of disagreements, before deciding which
 answer is specified. See ` + "`engine_direct_matrix_test.go`" + ` for each case.
 

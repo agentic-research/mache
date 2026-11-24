@@ -268,6 +268,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 				log.Printf("collectNodes: skip file name render %q: %v", fileSchema.Name, err) // coverage:ignore
 				continue                                                                       // coverage:ignore
 			}
+			fileName, _ = graph.NameOrUnnamed(fileName)
 			filePath := joinSegment(currentPath, fileName)
 			fileId := toNodeID(filePath)
 
@@ -712,6 +713,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				log.Printf("processNode: skip file name render %q: %v", fileSchema.Name, err) // coverage:ignore
 				continue                                                                      // coverage:ignore
 			}
+			fileName, _ = graph.NameOrUnnamed(fileName)
 			filePath := joinSegment(currentPath, fileName)
 			fileId := toNodeID(filePath)
 

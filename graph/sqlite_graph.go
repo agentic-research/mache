@@ -105,6 +105,9 @@ type SQLiteGraph struct {
 	extractor CallExtractor
 	defs      map[string][]string // symbol_name → []construct_dir_id (populated by AddDef)
 	defTokens map[string][]string // construct_dir_id → []symbol_name, the same facts by node
+	// templatedLeaves maps the path of a file whose schema name is a
+	// template to its leaf, as the direct scan rendered it.
+	templatedLeaves sync.Map
 
 	// scopedExtractor resolves calls for a single construct directly against
 	// a pre-parsed `_ast` table, keyed by the construct's real ast_source_id/
@@ -191,6 +194,10 @@ func OpenSQLiteGraphWith(dbPath string, schema *api.Topology, render TemplateRen
 	var count int
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='nodes'").Scan(&count); err == nil && count > 0 {
 		return openNodesTableGraph(db, lock.dsn(dbPath), dbPath, tableName, schema, render)
+	}
+	if err := checkDirectSchema(schema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open %s: %w", dbPath, err)
 	}
 	return openLegacyGraph(db, dbPath, tableName, schema, render)
 }
@@ -567,7 +574,19 @@ func (g *SQLiteGraph) Close() error {
 // walkSchema maps a path to its schema level and (if a file) leaf definition.
 // Returns (level, nil) for directories, (level, &leaf) for files, (nil, nil) for invalid paths.
 func (g *SQLiteGraph) walkSchema(segments []string) (*schemaLevel, *api.Leaf) {
-	return walkSchemaLevels(g.levels, segments)
+	level, leaf := walkSchemaLevels(g.levels, segments)
+	if level != nil || leaf != nil || g.useNodesTable {
+		return level, leaf
+	}
+	// A file whose name is a template is found by the path the scan gave
+	// it, since its name is only known per record: scan its root first.
+	if len(segments) > 1 && g.ensureScanned(segments[0]) == nil {
+		if v, ok := g.templatedLeaves.Load(strings.Join(segments, "/")); ok {
+			parent, _ := walkSchemaLevels(g.levels, segments[:len(segments)-1])
+			return parent, v.(*api.Leaf)
+		}
+	}
+	return nil, nil
 }
 
 // ---------------------------------------------------------------------------

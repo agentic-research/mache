@@ -36,6 +36,15 @@ func engineGraph(t *testing.T, schema *api.Topology, dataPath string) *graph.SQL
 // each in results(id, record), nodes projected on demand.
 func directGraph(t *testing.T, schema *api.Topology, dataPath string) *graph.SQLiteGraph {
 	t.Helper()
+	g, err := openDirect(t, schema, dataPath)
+	require.NoError(t, err)
+	return g
+}
+
+// openDirect is directGraph for a caller that wants the open's error: the
+// direct path refuses a schema it cannot honour.
+func openDirect(t *testing.T, schema *api.Topology, dataPath string) (*graph.SQLiteGraph, error) {
+	t.Helper()
 	raw, err := os.ReadFile(dataPath)
 	require.NoError(t, err)
 	var records []json.RawMessage
@@ -53,10 +62,12 @@ func directGraph(t *testing.T, schema *api.Topology, dataPath string) *graph.SQL
 	require.NoError(t, db.Close())
 
 	g, err := graph.OpenSQLiteGraph(p, schema, machetmpl.Render)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 	t.Cleanup(func() { _ = g.Close() })
 	require.NoError(t, g.EagerScan())
-	return g
+	return g, nil
 }
 
 // treeOf is every node id under root, sorted.
