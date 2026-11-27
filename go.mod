@@ -22,7 +22,7 @@ require (
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/text v0.44.0
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 	mvdan.cc/gofumpt v0.12.0
 	mvdan.cc/sh/v3 v3.14.1
 )
